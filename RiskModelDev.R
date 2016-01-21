@@ -63,19 +63,28 @@ add.index.lcdb <- function(indexID="000985.SH"){
   return("Done!")
 }
 
-
+#' build.liquid.factor
+#'
+#' create liquidity factor in local db and update the factor
+#' @author Andrew Dow
+#' @param type indicates whether to create the new factor or to update the factor.
+#' @return nothing
+#' @examples 
+#' build.liquid.factor("new")
+#' build.liquid.factor("update")
 build.liquid.factor <- function(type=c("new","update")){
   time <- Sys.time()
   type <- match.arg(type)
   if(type=='new'){
     qr <- "select t.ID,t.TradingDay,t.TurnoverVolume,t.NonRestrictedShares 
     from QT_DailyQuote t
-    where t.TradingDay>=20040101"
+    where t.TradingDay>=20050101"
     re <- dbGetQuery(db.local(),qr)
     
     re$TurnoverRate <- re$TurnoverVolume/(re$NonRestrictedShares*10000)
     re <- re[,c("ID","TradingDay","TurnoverRate")]
     re <- arrange(re,ID,TradingDay)
+    re$TurnoverRate <-abs(re$TurnoverRate) 
     
     tmp <- as.data.frame(table(re$ID))
     tmp <- tmp[tmp$Freq>=21,]
@@ -85,6 +94,7 @@ build.liquid.factor <- function(type=c("new","update")){
     result <- ddply(re,"ID",mutate,STOM=rollsum(TurnoverRate,21,fill=NA,align = 'right'))
     result <- subset(result,!is.na(result$STOM))
     result$STOM <- log(result$STOM)
+    result[result$TurnoverRate==0,"STOM"] <- NA
     result <- melt(result,id=c("ID","TradingDay"))
     colnames(result) <- c("ID","TradingDay","FactorName","FactorScore")
     dbWriteTable(db.local(),"QT_FactorScore_Liquidity",result)
@@ -100,6 +110,7 @@ build.liquid.factor <- function(type=c("new","update")){
     re$TurnoverRate <- re$TurnoverVolume/(re$NonRestrictedShares*10000)
     re <- re[,c("ID","TradingDay","TurnoverRate")]
     re <- arrange(re,ID,TradingDay)
+    re$TurnoverRate <-abs(re$TurnoverRate) 
     
     tmp <- as.data.frame(table(re$ID))
     tmp <- tmp[tmp$Freq>=21,]
@@ -110,6 +121,7 @@ build.liquid.factor <- function(type=c("new","update")){
     result <- subset(result,!is.na(result$STOM))
     result$STOM <- log(result$STOM)
     result <- subset(result,TradingDay>date)
+    result[result$TurnoverRate==0,"STOM"] <- NA
     result <- melt(result,id=c("ID","TradingDay"))
     colnames(result) <- c("ID","TradingDay","FactorName","FactorScore")
     dbWriteTable(db.local(),"QT_FactorScore_Liquidity",result,overwrite=FALSE,append=TRUE,row.names=FALSE)
@@ -132,15 +144,48 @@ gf.liquidity <- function(TS){
   return(re)
 }
 
-RebDates <- getRebDates(as.Date('2012-01-31'),as.Date('2014-12-31'),'month')
+
+
+RebDates <- getRebDates(as.Date('2010-01-31'),as.Date('2014-12-31'),'month')
 TS <- getTS(RebDates,'EI000985')
-system.time(TSF <- getTSF(TS, gf.liquidity, factorDir = 1,
+TSF <- getTSF(TS, gf.liquidity, factorDir = -1,
                           factorOutlier = 3, factorStd ="norm",
                           factorNA = "median",
-                          sectorAttr = defaultSectorAttr()))
-system.time(TSFR <-  getTSR(TSF))
+                          sectorAttr = defaultSectorAttr())
+TSFR <- getTSR(TSF)
+TSFR <- rename(TSFR,c("factorscore"="liquidity"))
+TSFR[is.na(TSFR$periodrtn),"periodrtn"] <- 0
+#get total market value
+mvf <- gf.mkt_cap(TS)
+mvf[is.na(mvf$factorscore),"factorscore"] <- median(mvf$factorscore,na.rm = T)
+mvf$factorscore <- log(mvf$factorscore)
+mvf$factorscore <- (mvf$factorscore-mean(mvf$factorscore))/sd(mvf$factorscore)
+mvf <- rename(mvf,c("factorscore"="marketvalue"))
 
+#get liquid market value
+fvf <- gf.float_cap(TS)
+fvf[is.na(fvf$factorscore),"factorscore"] <- median(fvf$factorscore,na.rm = T)
+fvf$factorscore <- fvf$factorscore/10000
+fvf <- rename(fvf,c("factorscore"="liquidvalue"))
 
+#get sector id
+TSS <- getSectorID(TS)
+TSS[is.na(TSS$sector),"sector"] <- "ESNone"
+TSS <- dcast(TSS,date+stockID~sector,length,fill=0)
+
+TSFR <- merge(TSFR,mvf,by =c("date","stockID"))
+TSFR <- merge(TSFR,fvf,by =c("date","stockID"))
+TSFR <- merge(TSFR,TSS,by =c("date","stockID"))
+
+dates <- unique(TSFR$date)
+for(i in dates){
+  tmp.tsfr <- TSFR[TSFR$date==i,]
+  tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,4,5,7)])
+  tmp.w <- diag(tmp.tsfr[,"liquidvalue"])
+  tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
+  tmp.f <- solve(crossprod(tmp.x,tmp.w) %*% tmp.x) %*% crossprod(tmp.x,tmp.w) %*% tmp.r
+  
+}
 
 
 
