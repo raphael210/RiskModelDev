@@ -129,6 +129,15 @@ build.liquid.factor <- function(type=c("new","update")){
   print(Sys.time()-time)
 }
 
+
+#' gf.liquidity
+#'
+#' get liquidity factor in local db
+#' @author Andrew Dow
+#' @param TS is a TS object.
+#' @return a TSF object
+#' @examples 
+#' gf.liquidity(TS)
 gf.liquidity <- function(TS){
   check.TS(TS)  
   TS$date <- rdate2int(TS$date)
@@ -146,7 +155,9 @@ gf.liquidity <- function(TS){
 
 
 
-RebDates <- getRebDates(as.Date('2010-01-31'),as.Date('2014-12-31'),'month')
+
+
+RebDates <- getRebDates(as.Date('2010-01-31'),as.Date('2015-11-30'),'month')
 TS <- getTS(RebDates,'EI000985')
 TSF <- getTSF(TS, gf.liquidity, factorDir = -1,
                           factorOutlier = 3, factorStd ="norm",
@@ -179,12 +190,13 @@ TSFR <- merge(TSFR,TSS,by =c("date","stockID"))
 
 dates <- unique(TSFR$date)
 for(i in dates){
+  
   tmp.tsfr <- TSFR[TSFR$date==i,]
   tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,4,5,7)])
   tmp.w <- diag(tmp.tsfr[,"liquidvalue"])
   tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
   tmp.f <- solve(crossprod(tmp.x,tmp.w) %*% tmp.x) %*% crossprod(tmp.x,tmp.w) %*% tmp.r
-  
+  glm1 <- glm()
 }
 
 
