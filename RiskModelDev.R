@@ -154,11 +154,48 @@ gf.liquidity <- function(TS){
 }
 
 
+#' gf.ln_mkt_cap
+#'
+#' get ln(market_value) in local db
+#' @author Andrew Dow
+#' @param TS is a TS object.
+#' @return a TSF object
+#' @examples 
+#' gf.ln_mkt_cap(TS)
+gf.ln_mkt_cap <- function(TS){
+  TSF <- gf.mkt_cap(TS)
+  TSF$factorscore <- ifelse(is.na(TSF$factorscore),NA,log(TSF$factorscore))
+  return(TSF)
+}
 
+
+
+
+#' calcf
+#'
+#' calculate lower case f
+#' @author Andrew Dow
+#' @param TSR is a TSR object.
+#' @param riskfactors is a set of risky factor for regressing.
+#' @param regresstype choose the regress type,the default type is glm
+#' @return a TSF object
+#' @examples 
+#' factorLists <- buildFactorLists(
+#' buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
+#' buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
+#' calcf(TSR,riskfactors=factorLists)
+
+calcf <- function(TSR,riskfactors=factorLists,regresstype=c('glm','lm')){
+  regresstype <- match.arg(regresstype)
+  
+}
 
 
 RebDates <- getRebDates(as.Date('2010-01-31'),as.Date('2015-11-30'),'month')
 TS <- getTS(RebDates,'EI000985')
+TSR <- getTSR(TS)
+
+  
 TSF <- getTSF(TS, gf.liquidity, factorDir = -1,
                           factorOutlier = 3, factorStd ="norm",
                           factorNA = "median",
