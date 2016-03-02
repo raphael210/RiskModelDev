@@ -175,66 +175,95 @@ gf.ln_mkt_cap <- function(TS){
 #'
 #' calculate lower case f
 #' @author Andrew Dow
-#' @param TSR is a TSR object.
-#' @param riskfactors is a set of risky factor for regressing.
+#' @param TS is a TS object.
+#' @param factorLists is a set of risky factor for regressing.
 #' @param regresstype choose the regress type,the default type is glm
 #' @return a TSF object
 #' @examples 
 #' factorLists <- buildFactorLists(
 #' buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
 #' buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
-#' calcf(TSR,riskfactors=factorLists)
+#' calcf(TSR,factorLists)
 
-calcf <- function(TSR,riskfactors=factorLists,regresstype=c('glm','lm')){
+calcf <- function(TS,factorLists,regresstype=c('glm','lm')){
   regresstype <- match.arg(regresstype)
   
+  #get factorscore
+  wgts <- rep(1/length(factorLists),length(factorLists))
+  TSF <- getMultiFactor(TS,factorLists,wgts)
+  TSF <- subset(TSF,select = -factorscore)
+  
+  #get sector id
+  TSS <- getSectorID(TS)
+  TSS[is.na(TSS$sector),"sector"] <- "ES09510000"
+  TSS <- dcast(TSS,date+stockID~sector,length,fill=0)
+  
+  #get period return
+  TSR <- getTSR(TS)
+  
+  #merge data
+  TSF <- merge(TSF,TSS,by =c("date","stockID"))
+  TSFR <- merge(TSF,TSR,by =c("date","stockID"))
+  
+  if(regresstype=='glm'){
+    #get liquid market value
+    TSFv <- getTSF(TS,'gf.float_cap',factorStd="norm",factorNA = "median")
+    TSFR <- merge(TSFR,TSFv,by =c("date","stockID"))
+    dates <- unique(TSFR$date)
+    for(i in 1:(length(dates)-1)){
+      tmp.tsfr <- TSFR[TSFR$date==dates[i],]
+      tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,ncol(tmp.tsfr)-2,ncol(tmp.tsfr)-1,ncol(tmp.tsfr))])
+      tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
+      tmp.r[is.na(tmp.r)] <- mean(tmp.r,na.rm = T)
+      tmp.w <- as.matrix(tmp.tsfr[,"factorscore"])
+      tmp.w <- diag(c(tmp.w),length(tmp.w))
+      tmp.f <- solve(crossprod(tmp.x,tmp.w) %*% tmp.x) %*% crossprod(tmp.x,tmp.w) %*% tmp.r
+      tmp.residual <- tmp.r-tmp.x %*% tmp.f
+      if(i==1){
+        f=data.frame(date=dates[i],fname=rownames(tmp.f),fvalue=c(tmp.f))
+        residual <- data.frame(date=dates[i],stockname=tmp.tsfr$stockID,res=tmp.residual)
+      }else{
+        f <- rbind(f,data.frame(date=dates[i],fname=rownames(tmp.f),fvalue=c(tmp.f)))
+        residual <- rbind(residual,data.frame(date=dates[i],stockname=tmp.tsfr$stockID,res=tmp.residual))
+      }
+    }
+    f$date <- as.Date(f$date)
+    residual$date <- as.Date(residual$date)
+    
+  }else{
+    dates <- unique(TSFR$date)
+    for(i in 1:(length(dates)-1)){
+      tmp.tsfr <- TSFR[TSFR$date==dates[i],]
+      tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,ncol(tmp.tsfr)-1,ncol(tmp.tsfr))])
+      tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
+      tmp.r[is.na(tmp.r)] <- mean(tmp.r,na.rm = T)
+      tmp.f <- solve(crossprod(tmp.x)) %*% t(tmp.x) %*% tmp.r
+      tmp.residual <- tmp.r-tmp.x %*% tmp.f
+      if(i==1){
+        f=data.frame(date=dates[i],fname=rownames(tmp.f),fvalue=c(tmp.f))
+        residual <- data.frame(date=dates[i],stockname=tmp.tsfr$stockID,res=tmp.residual)
+      }else{
+        f <- rbind(f,data.frame(date=dates[i],fname=rownames(tmp.f),fvalue=c(tmp.f)))
+        residual <- rbind(residual,data.frame(date=dates[i],stockname=tmp.tsfr$stockID,res=tmp.residual))
+      }
+    }
+    f$date <- as.Date(f$date)
+    residual$date <- as.Date(residual$date)
+    
+  }
+  
+  
+  
 }
 
-
-RebDates <- getRebDates(as.Date('2010-01-31'),as.Date('2015-11-30'),'month')
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2015-12-31'),'month')
 TS <- getTS(RebDates,'EI000985')
-TSR <- getTSR(TS)
+factorLists <- buildFactorLists(
+    buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
+    buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
 
-  
-TSF <- getTSF(TS, gf.liquidity, factorDir = -1,
-                          factorOutlier = 3, factorStd ="norm",
-                          factorNA = "median",
-                          sectorAttr = defaultSectorAttr())
-TSFR <- getTSR(TSF)
-TSFR <- rename(TSFR,c("factorscore"="liquidity"))
-TSFR[is.na(TSFR$periodrtn),"periodrtn"] <- 0
-#get total market value
-mvf <- gf.mkt_cap(TS)
-mvf[is.na(mvf$factorscore),"factorscore"] <- median(mvf$factorscore,na.rm = T)
-mvf$factorscore <- log(mvf$factorscore)
-mvf$factorscore <- (mvf$factorscore-mean(mvf$factorscore))/sd(mvf$factorscore)
-mvf <- rename(mvf,c("factorscore"="marketvalue"))
 
-#get liquid market value
-fvf <- gf.float_cap(TS)
-fvf[is.na(fvf$factorscore),"factorscore"] <- median(fvf$factorscore,na.rm = T)
-fvf$factorscore <- fvf$factorscore/10000
-fvf <- rename(fvf,c("factorscore"="liquidvalue"))
 
-#get sector id
-TSS <- getSectorID(TS)
-TSS[is.na(TSS$sector),"sector"] <- "ESNone"
-TSS <- dcast(TSS,date+stockID~sector,length,fill=0)
-
-TSFR <- merge(TSFR,mvf,by =c("date","stockID"))
-TSFR <- merge(TSFR,fvf,by =c("date","stockID"))
-TSFR <- merge(TSFR,TSS,by =c("date","stockID"))
-
-dates <- unique(TSFR$date)
-for(i in dates){
-  
-  tmp.tsfr <- TSFR[TSFR$date==i,]
-  tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,4,5,7)])
-  tmp.w <- diag(tmp.tsfr[,"liquidvalue"])
-  tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
-  tmp.f <- solve(crossprod(tmp.x,tmp.w) %*% tmp.x) %*% crossprod(tmp.x,tmp.w) %*% tmp.r
-  glm1 <- glm()
-}
 
 
 
