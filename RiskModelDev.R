@@ -4,7 +4,7 @@ suppressMessages(library(lubridate))
 suppressMessages(library(reshape2))
 suppressMessages(library(plyr))
 suppressMessages(library(stringr))
-
+suppressMessages(library(ggplot2))
 
 #' add.index.lcdb
 #'
@@ -171,47 +171,50 @@ gf.ln_mkt_cap <- function(TS){
 
 
 
-#' calcf
+#' calcfres
 #'
-#' calculate lower case f
+#' calculate lower case f vector and the residual vector
 #' @author Andrew Dow
 #' @param TS is a TS object.
 #' @param factorLists is a set of risky factor for regressing.
 #' @param regresstype choose the regress type,the default type is glm
-#' @return a TSF object
+#' @return a list,contains TSFR,f,residual
 #' @examples 
 #' factorLists <- buildFactorLists(
 #' buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
 #' buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
-#' calcf(TSR,factorLists)
+#' calcfres(TS,factorLists)
 
-calcf <- function(TS,factorLists,regresstype=c('glm','lm')){
+calcfres <- function(TS,factorLists,regresstype=c('glm','lm')){
+  ptm <- proc.time()
+
   regresstype <- match.arg(regresstype)
   
-  #get factorscore
+  cat("getting factorscore......","\n")
   wgts <- rep(1/length(factorLists),length(factorLists))
   TSF <- getMultiFactor(TS,factorLists,wgts)
   TSF <- subset(TSF,select = -factorscore)
   
-  #get sector id
+  cat("getting sector id......","\n")
   TSS <- getSectorID(TS)
   TSS[is.na(TSS$sector),"sector"] <- "ES09510000"
   TSS <- dcast(TSS,date+stockID~sector,length,fill=0)
   
-  #get period return
+  cat("getting period return......","\n")
   TSR <- getTSR(TS)
   
   #merge data
   TSF <- merge(TSF,TSS,by =c("date","stockID"))
   TSFR <- merge(TSF,TSR,by =c("date","stockID"))
   
+  cat("calculating f and residual......","\n")
   if(regresstype=='glm'){
     #get liquid market value
     TSFv <- getTSF(TS,'gf.float_cap',factorStd="norm",factorNA = "median")
-    TSFR <- merge(TSFR,TSFv,by =c("date","stockID"))
-    dates <- unique(TSFR$date)
+    TSFRv <- merge(TSFR,TSFv,by =c("date","stockID"))
+    dates <- unique(TSFRv$date)
     for(i in 1:(length(dates)-1)){
-      tmp.tsfr <- TSFR[TSFR$date==dates[i],]
+      tmp.tsfr <- TSFRv[TSFRv$date==dates[i],]
       tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,ncol(tmp.tsfr)-2,ncol(tmp.tsfr)-1,ncol(tmp.tsfr))])
       tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
       tmp.r[is.na(tmp.r)] <- mean(tmp.r,na.rm = T)
@@ -251,16 +254,69 @@ calcf <- function(TS,factorLists,regresstype=c('glm','lm')){
     residual$date <- as.Date(residual$date)
     
   }
+  re <- list(TSFR,f,residual)
+  tpassed <- proc.time()-ptm
+  tpassed <- tpassed[3]
+  cat("This function running time is ",tpassed/60,"min.")
+  return(re)
+}
+
+
+
+#' calcFDelta
+#'
+#' calculate F covariance matrix and Delta
+#' @author Andrew Dow
+#' @param f is a factor return dataframe.
+#' @param residual is a residual dataframe.
+#' @return a list,contains Fcov and Delta.
+#' @examples 
+#' calcFDelta(f,residual)
+calcFDelta <- function(f,residual,rollingperiod=36){
+  ptm <- proc.time()
+  f <- dcast(f,date~fname,value.var = 'fvalue')
+  f <- arrange(f,date)
+  for(i in rollingperiod:nrow(f)){
+    tmp.f <- f[(i-rollingperiod+1):i,]
+    tmp.Fcov <- cov(tmp.f[,-1])
+    
+    tmp.residual <- residual[residual$date %in% tmp.f$date,]
+    tmp.Delta <- ddply(tmp.residual,.(stockname),summarize,var=var(res))
+    tmp.Delta <- cbind(date=f$date[i],tmp.Delta)
+    if(i==rollingperiod){
+      Fcov <- data.frame(date=f$date[i],tmp.Fcov)
+      Delta <- tmp.Delta
+    } 
+    else{
+      Fcov <- rbind(Fcov,data.frame(date=f$date[i],tmp.Fcov))
+      Delta <- rbind(Delta,tmp.Delta)
+    } 
+  }
   
+  re <- list(Fcov,Delta)
+  tpassed <- proc.time()-ptm
+  tpassed <- tpassed[3]
+  cat("This function running time is ",tpassed,"s.")
+  return(re)
   
   
 }
+
 
 RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2015-12-31'),'month')
 TS <- getTS(RebDates,'EI000985')
 factorLists <- buildFactorLists(
     buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
     buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
+
+data <- calcfres(TS,factorLists,regresstype = 'glm')
+TSFR <- data[[1]]
+f <- data[[2]]
+residual <- data[[3]]
+
+data <- calcFDelta(f,residual)
+Fcov <- data[[1]]
+Delta <- data[[2]]
 
 
 
