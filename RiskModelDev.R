@@ -4,6 +4,7 @@ suppressMessages(library(lubridate))
 suppressMessages(library(reshape2))
 suppressMessages(library(plyr))
 suppressMessages(library(stringr))
+suppressMessages(library(nloptr))
 
 #' add.index.lcdb
 #'
@@ -288,6 +289,7 @@ calcFDelta <- function(riskf,residual,rollingperiod=36){
   ptm <- proc.time()
   f <- dcast(riskf,date~fname,fill=0,value.var = 'fvalue')
   f <- arrange(f,date)
+  # the follow rolling covariance for loop can be optimized.
   for(i in rollingperiod:nrow(f)){
     tmp.f <- f[(i-rollingperiod+1):i,]
     tmp.Fcov <- cov(tmp.f[,-1])
@@ -329,6 +331,32 @@ calcAlphaf <- function(alphaf,meanperiod=12){
   f <- subset(f,!is.na(fmean),select=c(date,fname,fmean))
   f <- arrange(f,date,fname)
   return(f)
+}
+
+
+#' OptWgt
+#'
+#' optimize portfolio weight.
+#' @author Andrew Dow
+#' @param alphaf is alpha factors' factor return.
+#' @param riskf is risk factors' factor return.
+#' @param covmat is the covariance matrix.
+#' @param control is optimization constraint,\bold{IndSty} means industry and style neutral,
+#' \bold{Ind} means only industry neutral,
+#' \bold{IndStyTE} means besides industry and style neutral,tracking error also required.
+#' @param benchmark is the benckmark for optimization.
+#' @return .
+#' @examples 
+#' 
+OptWgt <- function(alphaf,riskf,covmat,control=c('IndSty','Ind','IndStyTE'),benchmark='EI000905'){
+  ptm <- proc.time()
+  control <- match.arg(control) 
+  
+  
+  
+  tpassed <- proc.time()-ptm
+  tpassed <- tpassed[3]
+  cat("This function running time is ",tpassed,"s.")
 }
 
 
