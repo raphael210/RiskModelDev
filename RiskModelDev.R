@@ -4,6 +4,7 @@ suppressMessages(library(lubridate))
 suppressMessages(library(reshape2))
 suppressMessages(library(plyr))
 suppressMessages(library(stringr))
+suppressMessages(library(PortfolioAnalytics))
 suppressMessages(library(nloptr))
 
 #' add.index.lcdb
@@ -50,16 +51,35 @@ add.index.lcdb <- function(indexID="000985.SH"){
   }
   oridata<-ldply(dates,subfun)
   oridata$date <- w.asDateTime(oridata$date,asdate = T)
-  result <- ddply(oridata, "wind_code", summarise,InDate=min(date),OutDate=max(date))
-  dates <- data.frame(OutDate=dates,new=c(dates[2:length(dates)],NA))
-  result <- merge(result,dates,by = 'OutDate')
-  result <- transform(result,indexID=c(str_c("EI",str_sub(indexID,1,6))),
-                      Flag=ifelse(is.na(new),1,0),UpdateTime=Sys.time())
-  result <- result[,c("indexID","wind_code","InDate","new","Flag","UpdateTime")]
-  colnames(result) <- c("indexID","SecuID","InDate","OutDate","Flag","UpdateTime")
-  result <- transform(result,SecuID=str_sub(str_c('EQ',SecuID,sep = ''),start = 1,end = 8),
-                      InDate=rdate2int(InDate),OutDate=rdate2int(OutDate))
-  dbWriteTable(db.local(),"LC_IndexComponent",result,overwrite=FALSE,append=TRUE,row.names=FALSE)
+  oridata <- oridata[,c('date','wind_code')]
+  oridata$wind_code <- str_c('EQ',str_sub(oridata$wind_code,1,6))
+  dates <- unique(oridata$date)
+  for(i in 1:length(dates)){
+    if(i==1){
+      tmp <- oridata[oridata$date==dates[i],]
+      re <- data.frame(indexID=str_c("EI",str_sub(indexID,1,6)),SecuID=tmp$wind_code,
+                       InDate=tmp$date,OutDate=as.Date('1900-01-01'),Flag=1,UpdateTime=tmp$date)
+    }else{
+      tmp1 <- oridata[oridata$date==dates[i-1],]
+      tmp2 <- oridata[oridata$date==dates[i],]
+      outstock <- setdiff(tmp1$wind_code,tmp2$wind_code)
+      instock <- setdiff(tmp2$wind_code,tmp1$wind_code)
+      if(length(outstock)>0){
+        re[(re$SecuID %in% outstock)&re$Flag==1,'OutDate'] <- dates[i]
+        re[(re$SecuID %in% outstock)&re$Flag==1,'UpdateTime'] <- dates[i]
+        re[(re$SecuID %in% outstock)&re$Flag==1,'Flag'] <- 0
+      }
+      if(length(instock)>0){
+        tmp2 <- tmp2[tmp2$wind_code %in% instock,]
+        tmp.re <- data.frame(indexID=str_c("EI",str_sub(indexID,1,6)),SecuID=tmp2$wind_code,
+                             InDate=tmp2$date,OutDate=as.Date('1900-01-01'),Flag=1,UpdateTime=tmp2$date)
+        re <- rbind(re,tmp.re)
+      }
+    }
+  }
+  re[re$OutDate=='1900-01-01',"OutDate"] <- NA
+  re <- transform(re,InDate=rdate2int(InDate),OutDate=rdate2int(OutDate))
+  dbWriteTable(db.local(),"LC_IndexComponent",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
   return("Done!")
 }
 
@@ -216,6 +236,11 @@ calcfres <- function(TS,alphafactorLists,riskfactorLists,regresstype=c('glm','lm
   cat("getting period return......","\n")
   TSR <- getTSR(TS)
   
+  tpassed <- proc.time()-ptm
+  tpassed <- tpassed[3]
+  cat("loading data costs ",tpassed/60,"min.")
+  
+  
   #merge data
   TSF <- merge(TSF,TSS,by =c("date","stockID"))
   TSFR <- merge(TSF,TSR,by =c("date","stockID"))
@@ -341,16 +366,92 @@ calcAlphaf <- function(alphaf,meanperiod=12){
 #' @param alphaf is alpha factors' factor return.
 #' @param riskf is risk factors' factor return.
 #' @param covmat is the covariance matrix.
-#' @param control is optimization constraint,\bold{IndSty} means industry and style neutral,
-#' \bold{Ind} means only industry neutral,
+#' @param constr is optimization constraint,\bold{IndSty} means industry and style neutral,
 #' \bold{IndStyTE} means besides industry and style neutral,tracking error also required.
 #' @param benchmark is the benckmark for optimization.
 #' @return .
 #' @examples 
 #' 
-OptWgt <- function(alphaf,riskf,covmat,control=c('IndSty','Ind','IndStyTE'),benchmark='EI000905'){
+OptWgt <- function(TSFR,alphaf,covmat,Delta,target=c('return','balance'),constr=c('IndSty','IndStyTE'),benchmark='EI000905',riskaversion=4){
   ptm <- proc.time()
-  control <- match.arg(control) 
+  target <- match.arg(target)
+  constr <- match.arg(constr) 
+  nperiod <- length(unique(TSFR$date))
+  alphafname <- unique(as.character(alphaf$fname))
+  tmp <- setdiff(colnames(TSFR[,-c(1,2)]),alphafname)
+  indfname <- tmp[str_detect(tmp,'ES')]
+  riskfname <- setdiff(tmp,indfname)
+  if(target=='return'){
+    if(constr=='IndSty'){
+      if(nperiod==1){
+        
+      }else{
+        for(i in unique(TSFR$date)){
+          tmp.TSFR <- TSFR[TSFR$date==i,]
+          tmp.alphaf <- alphaf[alphaf$date==i,]
+          tmp.Fcov <- Fcov[Fcov$date==i,]
+          tmp.Delta <- Delta[Delta$date==i,]
+          
+          alphamat <- as.matrix(tmp.TSFR[,alphafname])
+          if(sum(benchmarkdata$sector=='ESNone')==0) riskmat <- as.matrix(tmp.TSFR[,setdiff(c(riskfname,indfname),'ESNone')])
+          else riskmat <- as.matrix(tmp.TSFR[,c(riskfname,indfname)])
+          rownames(alphamat) <- tmp.TSFR$stockID
+          rownames(riskmat) <- tmp.TSFR$stockID
+        
+          benchmarkdata <- getIndexCompWgt(indexID = benchmark,i)
+          sec <- getSectorID(benchmarkdata[,c('date','stockID')])
+          sec[is.na(sec$sector),"sector"] <- 'ESNone'
+          benchmarkdata <- merge(benchmarkdata,sec,by=c('date','stockID'))
+          secwgt <- ddply(benchmarkdata,.(sector),summarise,secwgt=sum(wgt))
+          secwgt$wgtlb <- secwgt$secwgt*0.95
+          secwgt$wgtub <- secwgt$secwgt*1.05
+          benchmarkdata <- merge(benchmarkdata,tmp.TSFR[,c('date','stockID',riskfname)],by=c('date','stockID'))
+          riskfwgt <- t(as.matrix(benchmarkdata$wgt))%*%as.matrix(benchmarkdata[,riskfname])
+          riskfwgt <- data.frame(sector=colnames(riskfwgt),secwgt=c(riskfwgt))
+          riskfwgt$wgtlb <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*0.8,riskfwgt$secwgt*1.2)
+          riskfwgt$wgtub <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*1.2,riskfwgt$secwgt*0.8)
+          totwgt <- rbind(riskfwgt,secwgt)
+          
+          port <- portfolio.spec(assets=tmp.TSFR$stockID)
+          port <- add.constraint(portfolio = port,type = 'weight_sum',min_sum=0.98,max_sum=1.02 )
+          port <- add.constraint(portfolio = port,type = 'box',min=0,max=0.02)
+          port <- add.constraint(portfolio = port,type='factor_exposure',
+                                 B=riskmat,lower=c(totwgt$wgtlb),upper=c(totwgt$wgtub))
+          port <- add.objective(port,type='return',name='mean')
+          
+          ret <- t(as.matrix(tmp.alphaf$fmean))%*% t(alphamat)
+          ret <- xts(ret,order.by = i)
+          opta <- optimize.portfolio(R=ret, portfolio=port,
+                                     optimize_method="ROI",search_size = 2000000)
+        }
+      }
+
+      lower <- c(0.1, 0.1, 0.1)
+      upper <- c(0.4, 0.4, 0.4)
+      B <- cbind(c(1, 1, 0, 0),
+                 c(0, 0, 1, 0),
+                 c(0, 0, 0, 1))
+      var_obj <- portfolio_risk_objective(name="var")
+      ret_obj <- return_objective(name="mean")
+      
+      #' Objective to minimize ETL.
+      etl_obj <- portfolio_risk_objective(name="ETL")
+      
+      #' Run optimization on minimum variance portfolio with leverage, long only,
+      #' and group constraints.
+      opta <- optimize.portfolio(R=ret, portfolio=pspec, 
+                                 constraints=list(lev_constr, lo_constr, grp_constr), 
+                                 objectives=list(var_obj), 
+                                 optimize_method="ROI")
+      opta
+    }else{
+      
+    }
+  }else{
+    
+  }
+
+  
   
   
   
@@ -360,7 +461,7 @@ OptWgt <- function(alphaf,riskf,covmat,control=c('IndSty','Ind','IndStyTE'),benc
 }
 
 
-RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2015-12-31'),'month')
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-02-29'),'month')
 TS <- getTS(RebDates,'EI000985')
 riskfactorLists <- buildFactorLists(
     buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
@@ -386,14 +487,14 @@ alphaf <- data[[2]]
 riskf <- data[[3]]
 residual <- data[[4]]
 
-data <- calcFDelta(riskf,residual)
-Fcov <- data[[1]]
-Delta <- data[[2]]
+data1 <- calcFDelta(riskf,residual)
+Fcov <- data1[[1]]
+Delta <- data1[[2]]
 
-alphafmean <- calcAlphaf(alphaf)
+alphaf <- calcAlphaf(alphaf)
 
-
-
-
-
+#clean data
+TSFR <- TSFR[TSFR$date>=min(Fcov$date),]
+TSFR <- subset(TSFR,select = -c(nextRebalanceDate,periodrtn))
+alphaf <- alphaf[alphaf$date>=min(Fcov$date),]
 
