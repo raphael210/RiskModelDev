@@ -275,14 +275,14 @@ gf.ln_mkt_cap <- function(TS){
 }
 
 
-#' getlocalTSFR
+#' getTSFQuick
 #'
-#' get local TSFR data 
+#' get TSF data quickly
 #' @author Andrew Dow
 #' @param TS is a TS object.
 #' @param alphafactorLists is a set of alpha factors for regressing.
 #' @param riskfactorLists is a set of risk factors for regressing.
-#' @return a TSFR object.
+#' @return a TSF object.
 #' @examples 
 #' RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2015-12-31'),'month')
 #' TS <- getTS(RebDates,'EI000985')
@@ -297,87 +297,50 @@ gf.ln_mkt_cap <- function(TS){
 #' riskfactorLists <- buildFactorLists(
 #'  buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
 #'  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
-getlocalTSFR <- function(TS,alphafactorLists,riskfactorLists){
+#'  TSF <- getTSFQuick(TS,alphafactorLists,riskfactorLists)
+getTSFQuick <- function(TS,alphafactorLists,riskfactorLists){
   ptm <- proc.time()
-  regresstype <- match.arg(regresstype)
+  load("~/R/FactorModelDev/TSFlocal.RData")
   
   factorLists <- c(alphafactorLists,riskfactorLists)
-  cat("getting factorscore......","\n")
-  wgts <- rep(1/length(factorLists),length(factorLists))
-  TSF <- getMultiFactor(TS,factorLists,wgts)
+  #deal with new factor
+  fname <- sapply(factorLists,'[[','factorName')
+  oldfname <- unique(TSFlocal$FactorName)
+  newfname <- setdiff(fname,oldfname)
+  if(length(newfname)>0){
+    cond <- sapply(factorLists, function(x)  x$factorName %in% newfname)
+    factorLists2 <- factorLists[cond]
+    TS2 <- unique(TSFlocal[,c('date','stockID')])
+    wgts <- rep(1/length(factorLists2),length(factorLists2))
+    TSF2 <- getMultiFactor(TS2,factorLists2,wgts)
+    TSF2 <- subset(TSF2,select = -factorscore)
+    if("NP_YOY" %in% colnames(TSF2)) TSF2 <- subset(TSF2,select = -c(InfoPublDate,EndDate,src,NP_LYCP))
+    TSFlocal2 <- melt(TSF2,id=c('date','stockID'),variable.name = "FactorName")
+    TSFlocal <- rbind(TSFlocal,TSFlocal2)
+  }
   
-  TSF <- subset(TSF,select = -factorscore)
-  if("NP_YOY" %in% colnames(TSF)) TSF <- subset(TSF,select = -c(InfoPublDate,EndDate,src,NP_LYCP))
+  #deal with new date
+  olddate <- unique(TSFlocal$date)
+  dates <- unique(TS$date)
+  newdate <- as.Date(setdiff(dates,olddate))
+  if(length(newdate)>0){
+    TS3 <- getTS(newdate,'EI000985')
+    wgts <- rep(1/length(factorLists),length(factorLists))
+    TSF3 <- getMultiFactor(TS3,factorLists,wgts)
+    TSF3 <- subset(TSF3,select = -factorscore)
+    if("NP_YOY" %in% colnames(TSF3)) TSF3 <- subset(TSF3,select = -c(InfoPublDate,EndDate,src,NP_LYCP))
+    TSFlocal3 <- melt(TSF3,id=c('date','stockID'),variable.name = "FactorName")
+    TSFlocal <- rbind(TSFlocal,TSFlocal3)
+  }
+  save(TSFlocal,file='TSFlocal.RData')
   
-  cat("getting sector id......","\n")
-  TSS <- getSectorID(TS)
-  TSS[is.na(TSS$sector),"sector"] <- "ESNone"
-  TSS <- dcast(TSS,date+stockID~sector,length,fill=0)
-  
-  cat("getting period return......","\n")
-  TSR <- getTSR(TS)
+  TSF <- merge(TS,TSFlocal,by=c('date','stockID'),all.x=T)
+  TSF <- dcast(TSF,date+stockID~FactorName)
   
   tpassed <- proc.time()-ptm
   tpassed <- tpassed[3]
   cat("loading data costs ",tpassed/60,"min.\n")
-  
-  
-  #merge data
-  TSF <- merge(TSF,TSS,by =c("date","stockID"))
-  TSFR <- merge(TSF,TSR,by =c("date","stockID"))
-  
-  cat("calculating f and residual......","\n")
-  if(regresstype=='glm'){
-    #get liquid market value
-    TSFv <- getTSF(TS,'gf.float_cap',factorStd="norm",factorNA = "median")
-    TSFRv <- merge(TSFR,TSFv,by =c("date","stockID"))
-    dates <- unique(TSFRv$date)
-    for(i in 1:(length(dates)-1)){
-      tmp.tsfr <- TSFRv[TSFRv$date==dates[i],]
-      tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,ncol(tmp.tsfr)-2,ncol(tmp.tsfr)-1,ncol(tmp.tsfr))])
-      tmp.x <- subset(tmp.x,select = (colnames(tmp.x)[colSums(tmp.x)!=0]))
-      tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
-      tmp.r[is.na(tmp.r)] <- mean(tmp.r,na.rm = T)
-      tmp.w <- as.matrix(tmp.tsfr[,"factorscore"])
-      tmp.w <- diag(c(tmp.w),length(tmp.w))
-      tmp.f <- solve(crossprod(tmp.x,tmp.w) %*% tmp.x) %*% crossprod(tmp.x,tmp.w) %*% tmp.r
-      tmp.residual <- tmp.r-tmp.x %*% tmp.f
-      if(i==1){
-        f=data.frame(date=dates[i+1],fname=rownames(tmp.f),fvalue=c(tmp.f))
-        residual <- data.frame(date=dates[i+1],stockID=tmp.tsfr$stockID,res=tmp.residual)
-      }else{
-        f <- rbind(f,data.frame(date=dates[i+1],fname=rownames(tmp.f),fvalue=c(tmp.f)))
-        residual <- rbind(residual,data.frame(date=dates[i+1],stockID=tmp.tsfr$stockID,res=tmp.residual))
-      }
-    }
-    
-  }else{
-    dates <- unique(TSFR$date)
-    for(i in 1:(length(dates)-1)){
-      tmp.tsfr <- TSFR[TSFR$date==dates[i],]
-      tmp.x <- as.matrix(tmp.tsfr[,-c(1,2,ncol(tmp.tsfr)-1,ncol(tmp.tsfr))])
-      tmp.x <- subset(tmp.x,select = (colnames(tmp.x)[colSums(tmp.x)!=0]))
-      tmp.r <- as.matrix(tmp.tsfr[,"periodrtn"])
-      tmp.r[is.na(tmp.r)] <- mean(tmp.r,na.rm = T)
-      tmp.f <- solve(crossprod(tmp.x)) %*% t(tmp.x) %*% tmp.r
-      tmp.residual <- tmp.r-tmp.x %*% tmp.f
-      if(i==1){
-        f=data.frame(date=dates[i+1],fname=rownames(tmp.f),fvalue=c(tmp.f))
-        residual <- data.frame(date=dates[i+1],stockID=tmp.tsfr$stockID,res=tmp.residual)
-      }else{
-        f <- rbind(f,data.frame(date=dates[i+1],fname=rownames(tmp.f),fvalue=c(tmp.f)))
-        residual <- rbind(residual,data.frame(date=dates[i+1],stockID=tmp.tsfr$stockID,res=tmp.residual))
-      }
-    }
-  }
-  alphafname <- sapply(alphafactorLists,'[[','factorName')
-  alphaf <- f[f$fname %in% alphafname,]
-  riskf <- f[!(f$fname %in% alphafname),]
-  re <- list(TSFR,alphaf,riskf,residual)
-  tpassed <- proc.time()-ptm
-  tpassed <- tpassed[3]
-  cat("This function running time is ",tpassed/60,"min.")
-  return(re)
+  return(TSF)
 }
 
 
@@ -652,8 +615,9 @@ factorIDs <- c("F000003","F000004","F000006","F000007","F000008","F000009","F000
 alphafactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
 alphafactorLists <- c(alphafactorLists1,alphafactorLists2)
 
+TSF <- getTSFQuick(TS,alphafactorLists,riskfactorLists)
 
-data <- calcfres(TS,alphafactorLists,riskfactorLists,regresstype = 'glm')
+data <- calcfres(TSF,alphafactorLists,riskfactorLists,regresstype = 'glm')
 TSFR <- data[[1]]
 alphaf <- data[[2]]
 riskf <- data[[3]]
