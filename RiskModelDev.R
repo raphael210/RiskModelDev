@@ -524,7 +524,7 @@ calcAlphaf <- function(alphaf,meanperiod=12){
 #' @return .
 #' @examples 
 #' 
-OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','IndStyTE'),benchmark='EI000905',riskexposure=list(riskf=0.1,indf=0.05)){
+OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind','IndStyTE'),benchmark='EI000905',riskexposure=list(riskf=0.1,indf=0.05)){
   ptm <- proc.time()
   constr <- match.arg(constr) 
   alphafname <- unique(as.character(alphaf$fname))
@@ -532,7 +532,64 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
   indfname <- tmp[str_detect(tmp,'ES')]
   riskfname <- setdiff(tmp,indfname)
   dates <- unique(TSF$date)
-  if(constr=='IndSty'){
+  if(constr=='Ind'){
+    for(i in dates){
+      cat(i,'\n')   
+      tmp.TSF <- TSF[TSF$date==i,]
+      tmp.alphaf <- alphaf[alphaf$date==i,]
+      tmp.Fcov <- Fcov[Fcov$date==i,]
+      tmp.Fcov <- tmp.Fcov[indfname,indfname]
+      tmp.Delta <- Delta[Delta$date==i,]
+      
+      #get the index component weight and stock sector info. 
+      benchmarkdata <- getIndexCompWgt(indexID = benchmark,i)
+      sec <- getSectorID(benchmarkdata[,c('date','stockID')],sectorAttr = list(33,1))
+      sec[is.na(sec$sector),"sector"] <- 'ES33510000'
+      benchmarkdata <- merge(benchmarkdata,sec,by=c('date','stockID'))
+      
+      alphamat <- as.matrix(tmp.TSF[,alphafname])
+      
+      riskmat <- as.matrix(tmp.TSF[,indfname])
+      rownames(alphamat) <- tmp.TSF$stockID
+      rownames(riskmat) <- tmp.TSF$stockID
+      
+      
+      totwgt <- ddply(benchmarkdata,.(sector),summarise,secwgt=sum(wgt))
+      totwgt$wgtlb <- totwgt$secwgt*(1-riskexposure$indf)
+      totwgt$wgtub <- totwgt$secwgt*(1+riskexposure$indf)
+      if(length(setdiff(indfname,totwgt$sector))>0){
+        missind <- setdiff(indfname,totwgt$sector)
+        missinddf <- data.frame(sector=missind,secwgt=rep(0,length(missind)), 
+                                wgtlb=rep(0,length(missind)), wgtub=rep(0,length(missind)))
+        totwgt <- rbind(totwgt,missinddf)
+      }
+      rownames(totwgt) <- totwgt$sector
+      totwgt <- totwgt[colnames(riskmat),]
+      
+      ret <- t(as.matrix(tmp.alphaf$fmean))%*% t(alphamat)
+      ret <- ret*riskaversion
+      Fcovmat <- as.matrix(tmp.Fcov[c(colnames(riskmat)),c(colnames(riskmat))])
+      Deltamat <- data.frame(stockID=rownames(alphamat))
+      Deltamat <- merge(Deltamat,tmp.Delta[,-1],by='stockID',all.x = T)
+      Deltamat[is.na(Deltamat$var),"var"] <- mean(Deltamat$var,na.rm = T)
+      Deltamat <- diag(c(Deltamat$var))
+      Dmat <- riskmat%*%Fcovmat%*%t(riskmat)+Deltamat
+      Amat <- cbind(riskmat,-1*riskmat)
+      nstock <- dim(Dmat)[1]
+      Amat <- cbind(1,Amat,diag(x=1,nstock),diag(x=-1,nstock))#control weight
+      bvec <- c(1,totwgt$wgtlb,-1*totwgt$wgtub,rep(0,nstock),rep(-0.01,nstock))
+      system.time(res <- solve.QP(Dmat,ret,Amat,bvec=bvec,meq = 1))
+      res$solution[abs(res$solution) <= 1e-3] <- 0
+      tmp <- data.frame(stockID=rownames(alphamat),wgt=res$solution)
+      tmp <- tmp[tmp$wgt>0,]
+      if(i==dates[1]){
+        result <- tmp
+      }else{
+        result <- rbind(result,tmp)
+      }
+      
+    }
+  }else if(constr=='IndSty'){
     for(i in dates){
         cat(as.character(i),'\n')      
         tmp.TSF <- TSF[TSF$date==i,]
@@ -611,44 +668,4 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
   cat("This function running time is ",tpassed,"s.")
 }
 
-
-RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-03-31'),'month')
-TS <- getTS(RebDates,'EI000985')
-
-riskfactorLists <- buildFactorLists(
-    buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
-    buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
-
-alphafactorLists1 <- buildFactorLists(
-  buildFactorList("gf.NP_YOY",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_scissor_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.GG_NP_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.GG_OR_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_OCF",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_SCF_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_MLL_Q",factorStd="norm",factorNA = "median")
-)
-factorIDs <- c("F000003","F000004","F000006","F000007","F000008","F000009","F000010")
-alphafactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
-alphafactorLists <- c(alphafactorLists1,alphafactorLists2)
-
-TSF <- getTSFQuick(TS,alphafactorLists,riskfactorLists)
-
-data <- calcfres(TSF,alphafactorLists,riskfactorLists,regresstype = 'glm')
-TSFR <- data[[1]]
-alphaf <- data[[2]]
-riskf <- data[[3]]
-residual <- data[[4]]
-
-data1 <- calcFDelta(riskf,residual)
-Fcov <- data1[[1]]
-Delta <- data1[[2]]
-
-alphaf <- calcAlphaf(alphaf)
-
-#clean data
-TSF <- subset(TSFR,date>=min(Fcov$date),select = -c(nextRebalanceDate,periodrtn))
-alphaf <- alphaf[alphaf$date>=min(Fcov$date),]
-
-optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta)
 
