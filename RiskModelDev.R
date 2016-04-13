@@ -517,14 +517,14 @@ calcAlphaf <- function(alphaf,meanperiod=12){
 #' @author Andrew Dow
 #' @param alphaf is alpha factors' factor return.
 #' @param riskf is risk factors' factor return.
-#' @param covmat is the covariance matrix.
+#' @param Fcov is the covariance matrix.
 #' @param constr is optimization constraint,\bold{IndSty} means industry and style neutral,
 #' \bold{IndStyTE} means besides industry and style neutral,tracking error also required.
 #' @param benchmark is the benckmark for optimization.
 #' @return .
 #' @examples 
 #' 
-OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind','IndStyTE'),benchmark='EI000905',riskexposure=list(riskf=0.1,indf=0.05)){
+OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind','IndStyTE'),benchmark='EI000905',riskexposure=list(riskf=0.1,indf=0.05)){
   ptm <- proc.time()
   constr <- match.arg(constr) 
   alphafname <- unique(as.character(alphaf$fname))
@@ -534,10 +534,11 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
   dates <- unique(TSF$date)
   if(constr=='Ind'){
     for(i in dates){
-      cat(i,'\n')   
+      cat('finishing ',round(match(i,dates)/length(dates)*100),'%.\n') 
       tmp.TSF <- TSF[TSF$date==i,]
       tmp.alphaf <- alphaf[alphaf$date==i,]
-      tmp.Fcov <- Fcov[Fcov$date==i,]
+      tmp.Fcov <- Fcov[Fcov$date==i,-1]
+      rownames(tmp.Fcov) <- colnames(tmp.Fcov)
       tmp.Fcov <- tmp.Fcov[indfname,indfname]
       tmp.Delta <- Delta[Delta$date==i,]
       
@@ -548,7 +549,6 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
       benchmarkdata <- merge(benchmarkdata,sec,by=c('date','stockID'))
       
       alphamat <- as.matrix(tmp.TSF[,alphafname])
-      
       riskmat <- as.matrix(tmp.TSF[,indfname])
       rownames(alphamat) <- tmp.TSF$stockID
       rownames(riskmat) <- tmp.TSF$stockID
@@ -568,10 +568,10 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
       
       ret <- t(as.matrix(tmp.alphaf$fmean))%*% t(alphamat)
       ret <- ret*riskaversion
-      Fcovmat <- as.matrix(tmp.Fcov[c(colnames(riskmat)),c(colnames(riskmat))])
+      Fcovmat <- as.matrix(tmp.Fcov)
       Deltamat <- data.frame(stockID=rownames(alphamat))
       Deltamat <- merge(Deltamat,tmp.Delta[,-1],by='stockID',all.x = T)
-      Deltamat[is.na(Deltamat$var),"var"] <- mean(Deltamat$var,na.rm = T)
+      Deltamat[is.na(Deltamat$var),"var"] <- median(Deltamat$var,na.rm = T)
       Deltamat <- diag(c(Deltamat$var))
       Dmat <- riskmat%*%Fcovmat%*%t(riskmat)+Deltamat
       Amat <- cbind(riskmat,-1*riskmat)
@@ -590,11 +590,14 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
       
     }
   }else if(constr=='IndSty'){
+    allriskfname <- c(riskfname,indfname)
     for(i in dates){
-        cat(as.character(i),'\n')      
+        cat('finishing ',round(match(i,dates)/length(dates)*100),'%.\n')    
         tmp.TSF <- TSF[TSF$date==i,]
         tmp.alphaf <- alphaf[alphaf$date==i,]
-        tmp.Fcov <- Fcov[Fcov$date==i,]
+        tmp.Fcov <- Fcov[Fcov$date==i,-1]
+        rownames(tmp.Fcov) <- colnames(tmp.Fcov)
+        tmp.Fcov <- tmp.Fcov[allriskfname,allriskfname]
         tmp.Delta <- Delta[Delta$date==i,]
         
         #get the index component weight and stock sector info. 
@@ -604,12 +607,10 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
         benchmarkdata <- merge(benchmarkdata,sec,by=c('date','stockID'))
         
         alphamat <- as.matrix(tmp.TSF[,alphafname])
-
-        riskmat <- as.matrix(tmp.TSF[,c(riskfname,indfname)])
+        riskmat <- as.matrix(tmp.TSF[,allriskfname])
         rownames(alphamat) <- tmp.TSF$stockID
         rownames(riskmat) <- tmp.TSF$stockID
       
-       
         secwgt <- ddply(benchmarkdata,.(sector),summarise,secwgt=sum(wgt))
         secwgt$wgtlb <- secwgt$secwgt*(1-riskexposure$indf)
         secwgt$wgtub <- secwgt$secwgt*(1+riskexposure$indf)
@@ -627,25 +628,24 @@ OptWgt <- function(TSF,alphaf,covmat,Delta,riskaversion=1,constr=c('IndSty','Ind
         riskfwgt$wgtub <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*(1+riskexposure$riskf),riskfwgt$secwgt*(1-riskexposure$riskf))
         totwgt <- rbind(riskfwgt,secwgt)
         rownames(totwgt) <- totwgt$sector
-        totwgt <- totwgt[colnames(riskmat),]
+        totwgt <- totwgt[allriskfname,]
         
         ret <- t(as.matrix(tmp.alphaf$fmean))%*% t(alphamat)
         ret <- ret*riskaversion
-        Fcovmat <- as.matrix(tmp.Fcov[c(colnames(riskmat)),c(colnames(riskmat))])
+        Fcovmat <- as.matrix(tmp.Fcov)
         Deltamat <- data.frame(stockID=rownames(alphamat))
         Deltamat <- merge(Deltamat,tmp.Delta[,-1],by='stockID',all.x = T)
-        Deltamat[is.na(Deltamat$var),"var"] <- mean(Deltamat$var,na.rm = T)
+        Deltamat[is.na(Deltamat$var),"var"] <- median(Deltamat$var,na.rm = T)
         Deltamat <- diag(c(Deltamat$var))
         Dmat <- riskmat%*%Fcovmat%*%t(riskmat)+Deltamat
         Amat <- cbind(riskmat,-1*riskmat)
         nstock <- dim(Dmat)[1]
-        Amat <- cbind(Amat,diag(x=1,nstock),diag(x=-1,nstock))#control weight
-        bvec <- c(totwgt$wgtlb,-1*totwgt$wgtub,rep(0,nstock),rep(-0.015,nstock))
-        res <- solve.QP(Dmat,ret,Amat,bvec=bvec)
+        Amat <- cbind(1,Amat,diag(x=1,nstock),diag(x=-1,nstock))#control weight
+        bvec <- c(1,totwgt$wgtlb,-1*totwgt$wgtub,rep(0,nstock),rep(-0.01,nstock))
+        system.time(res <- solve.QP(Dmat,ret,Amat,bvec=bvec,meq=1))
         res$solution[abs(res$solution) <= 1e-3] <- 0
         tmp <- data.frame(stockID=rownames(alphamat),wgt=res$solution)
         tmp <- tmp[tmp$wgt>0,]
-        tmp$wgt <-tmp$wgt/sum(tmp$wgt) 
         if(i==dates[1]){
           result <- tmp
         }else{
