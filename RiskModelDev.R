@@ -339,6 +339,7 @@ getTSFQuick <- function(TS,alphafactorLists,riskfactorLists){
     if("NP_YOY" %in% colnames(TSF2)) TSF2 <- subset(TSF2,select = -c(InfoPublDate,EndDate,src,NP_LYCP))
     TSFlocal2 <- melt(TSF2,id=c('date','stockID'),variable.name = "FactorName")
     TSFlocal <- rbind(TSFlocal,TSFlocal2)
+    save(TSFlocal,file='TSFlocal.RData')
   }
   
   #deal with new date
@@ -353,10 +354,12 @@ getTSFQuick <- function(TS,alphafactorLists,riskfactorLists){
     if("NP_YOY" %in% colnames(TSF3)) TSF3 <- subset(TSF3,select = -c(InfoPublDate,EndDate,src,NP_LYCP))
     TSFlocal3 <- melt(TSF3,id=c('date','stockID'),variable.name = "FactorName")
     TSFlocal <- rbind(TSFlocal,TSFlocal3)
+    save(TSFlocal,file='TSFlocal.RData')
   }
-  save(TSFlocal,file='TSFlocal.RData')
   
-  TSF <- merge(TS,TSFlocal,by=c('date','stockID'),all.x=T)
+  TSFuse <- TSFlocal[TSFlocal$FactorName %in%fname,]
+  TSF <- merge(TS,TSFuse,by=c('date','stockID'),all.x=T)
+  TSF <- TSF[!is.na(TSF$FactorName),]
   TSF <- dcast(TSF,date+stockID~FactorName)
   
   tpassed <- proc.time()-ptm
@@ -387,7 +390,7 @@ calcfres <- function(TSF,alphafactorLists,riskfactorLists,regresstype=c('glm','l
   cat("getting sector id......","\n")
   TSS <- getSectorID(TS,sectorAttr = list(33,1))
   TSS[is.na(TSS$sector),'sector'] <- 'ES33510000'
-  TSS <- dcast(TSS,date+stockID~sector,length,fill=0)
+  TSS <- dcast(TSS,date+stockID~sector,length,fill=0,value.var = 'sector')
   
   cat("getting period return......","\n")
   TSR <- getTSR(TS)
@@ -524,7 +527,7 @@ calcAlphaf <- function(alphaf,meanperiod=12){
 #' @return .
 #' @examples 
 #' 
-OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind','IndStyTE'),benchmark='EI000905',riskexposure=list(riskf=0.1,indf=0.05)){
+OptWgt <- function(TSF,alphaf,Fcov,Delta,constr=c('IndSty','Ind','IndStyTE'),benchmark='EI000905',riskavr=1,indfexp=0.05,...){
   ptm <- proc.time()
   constr <- match.arg(constr) 
   alphafname <- unique(as.character(alphaf$fname))
@@ -535,39 +538,46 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind',
   if(constr=='Ind'){
     for(i in dates){
       cat('finishing ',round(match(i,dates)/length(dates)*100),'%.\n') 
+      #get one period raw data
       tmp.TSF <- TSF[TSF$date==i,]
       tmp.alphaf <- alphaf[alphaf$date==i,]
+      rownames(tmp.alphaf) <- tmp.alphaf$fname
+      tmp.alphaf <- tmp.alphaf[alphafname,]
       tmp.Fcov <- Fcov[Fcov$date==i,-1]
       rownames(tmp.Fcov) <- colnames(tmp.Fcov)
       tmp.Fcov <- tmp.Fcov[indfname,indfname]
       tmp.Delta <- Delta[Delta$date==i,]
       
-      #get the index component weight and stock sector info. 
+      #get benchmark stock component weight and sector info. 
       benchmarkdata <- getIndexCompWgt(indexID = benchmark,i)
       sec <- getSectorID(benchmarkdata[,c('date','stockID')],sectorAttr = list(33,1))
       sec[is.na(sec$sector),"sector"] <- 'ES33510000'
       benchmarkdata <- merge(benchmarkdata,sec,by=c('date','stockID'))
+      totwgt <- ddply(benchmarkdata,.(sector),summarise,secwgt=sum(wgt))
+      totwgt$wgtlb <- totwgt$secwgt*(1-indfexp)
+      totwgt$wgtub <- totwgt$secwgt*(1+indfexp)
+      rownames(totwgt) <- totwgt$sector
       
+      
+      #deal with missing industry
+      missind <- setdiff(indfname,totwgt$sector)
+      if(length(missind)>0){
+        indfname <- setdiff(indfname,missind)
+        tmp.Fcov <- tmp.Fcov[indfname,indfname]
+        tmp.TSF <- tmp.TSF[tmp.TSF[,missind]==0,]
+        tmp.TSF <- tmp.TSF[,!colnames(tmp.TSF)%in% missind]
+      }
+      totwgt <- totwgt[indfname,]
+      
+      
+      #prepare matrix data
       alphamat <- as.matrix(tmp.TSF[,alphafname])
       riskmat <- as.matrix(tmp.TSF[,indfname])
       rownames(alphamat) <- tmp.TSF$stockID
       rownames(riskmat) <- tmp.TSF$stockID
       
-      
-      totwgt <- ddply(benchmarkdata,.(sector),summarise,secwgt=sum(wgt))
-      totwgt$wgtlb <- totwgt$secwgt*(1-riskexposure$indf)
-      totwgt$wgtub <- totwgt$secwgt*(1+riskexposure$indf)
-      if(length(setdiff(indfname,totwgt$sector))>0){
-        missind <- setdiff(indfname,totwgt$sector)
-        missinddf <- data.frame(sector=missind,secwgt=rep(0,length(missind)), 
-                                wgtlb=rep(0,length(missind)), wgtub=rep(0,length(missind)))
-        totwgt <- rbind(totwgt,missinddf)
-      }
-      rownames(totwgt) <- totwgt$sector
-      totwgt <- totwgt[colnames(riskmat),]
-      
       ret <- t(as.matrix(tmp.alphaf$fmean))%*% t(alphamat)
-      ret <- ret*riskaversion
+      ret <- ret*riskavr
       Fcovmat <- as.matrix(tmp.Fcov)
       Deltamat <- data.frame(stockID=rownames(alphamat))
       Deltamat <- merge(Deltamat,tmp.Delta[,-1],by='stockID',all.x = T)
@@ -578,10 +588,15 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind',
       nstock <- dim(Dmat)[1]
       Amat <- cbind(1,Amat,diag(x=1,nstock),diag(x=-1,nstock))#control weight
       bvec <- c(1,totwgt$wgtlb,-1*totwgt$wgtub,rep(0,nstock),rep(-0.01,nstock))
-      system.time(res <- solve.QP(Dmat,ret,Amat,bvec=bvec,meq = 1))
+      system.time(res <- solve.QP(Dmat,ret,Amat,bvec,meq = 1))
+
       res$solution[abs(res$solution) <= 1e-3] <- 0
-      tmp <- data.frame(stockID=rownames(alphamat),wgt=res$solution)
-      tmp <- tmp[tmp$wgt>0,]
+      tmp <- data.frame(date=as.Date(i),stockID=rownames(alphamat),wgt=res$solution)
+      tmp <- merge(tmp,benchmarkdata[,c("date","stockID","wgt")],by = c("date","stockID"),all.x = T)
+      colnames(tmp) <-c( "date","stockID","wgtopt","wgtinbench")
+      tmp.sec <- getSectorID(tmp[,c('date','stockID')],sectorAttr = list(33,1))
+      tmp.sec[is.na(tmp.sec$sector),"sector"] <- 'ES33510000'
+      tmp <- merge(tmp,tmp.sec,by=c('date','stockID'))
       if(i==dates[1]){
         result <- tmp
       }else{
@@ -591,47 +606,57 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind',
     }
   }else if(constr=='IndSty'){
     allriskfname <- c(riskfname,indfname)
+    riskfexp <- list(...)
     for(i in dates){
         cat('finishing ',round(match(i,dates)/length(dates)*100),'%.\n')    
         tmp.TSF <- TSF[TSF$date==i,]
         tmp.alphaf <- alphaf[alphaf$date==i,]
+        rownames(tmp.alphaf) <- tmp.alphaf$fname
+        tmp.alphaf <- tmp.alphaf[alphafname,]
         tmp.Fcov <- Fcov[Fcov$date==i,-1]
         rownames(tmp.Fcov) <- colnames(tmp.Fcov)
         tmp.Fcov <- tmp.Fcov[allriskfname,allriskfname]
         tmp.Delta <- Delta[Delta$date==i,]
         
-        #get the index component weight and stock sector info. 
+        #get benchmark stock component weight and sector info. 
         benchmarkdata <- getIndexCompWgt(indexID = benchmark,i)
         sec <- getSectorID(benchmarkdata[,c('date','stockID')],sectorAttr = list(33,1))
         sec[is.na(sec$sector),"sector"] <- 'ES33510000'
         benchmarkdata <- merge(benchmarkdata,sec,by=c('date','stockID'))
-        
-        alphamat <- as.matrix(tmp.TSF[,alphafname])
-        riskmat <- as.matrix(tmp.TSF[,allriskfname])
-        rownames(alphamat) <- tmp.TSF$stockID
-        rownames(riskmat) <- tmp.TSF$stockID
       
         secwgt <- ddply(benchmarkdata,.(sector),summarise,secwgt=sum(wgt))
-        secwgt$wgtlb <- secwgt$secwgt*(1-riskexposure$indf)
-        secwgt$wgtub <- secwgt$secwgt*(1+riskexposure$indf)
-        if(length(setdiff(indfname,secwgt$sector))>0){
-          missind <- setdiff(indfname,secwgt$sector)
-          missinddf <- data.frame(sector=missind,secwgt=rep(0,length(missind)), 
-                            wgtlb=rep(0,length(missind)), wgtub=rep(0,length(missind)))
-          secwgt <- rbind(secwgt,missinddf)
-        }
+        secwgt$wgtlb <- secwgt$secwgt*(1-indfexp)
+        secwgt$wgtub <- secwgt$secwgt*(1+indfexp)
         
+        #deal with missing industry
+        missind <- setdiff(indfname,secwgt$sector)
+        if(length(missind)>0){
+          allriskfname <- setdiff(allriskfname,missind)
+          tmp.Fcov <- tmp.Fcov[allriskfname,allriskfname]
+          tmp.TSF <- tmp.TSF[tmp.TSF[,missind]==0,]
+          tmp.TSF <- tmp.TSF[,!colnames(tmp.TSF)%in% missind]
+        }
+
+        #get benchmark risk factor value
         benchmarkdata <- merge(benchmarkdata,tmp.TSF[,c('date','stockID',riskfname)],by=c('date','stockID'))
         riskfwgt <- t(as.matrix(benchmarkdata$wgt))%*%as.matrix(benchmarkdata[,riskfname])
         riskfwgt <- data.frame(sector=colnames(riskfwgt),secwgt=c(riskfwgt))
-        riskfwgt$wgtlb <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*(1-riskexposure$riskf),riskfwgt$secwgt*(1+riskexposure$riskf))
-        riskfwgt$wgtub <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*(1+riskexposure$riskf),riskfwgt$secwgt*(1-riskexposure$riskf))
+        riskfwgt <- merge(riskfwgt,riskfexp,by='sector')
+        riskfwgt$wgtlb <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*(1+riskfwgt$lb),riskfwgt$secwgt*(1-riskfwgt$lb))
+        riskfwgt$wgtub <- ifelse(riskfwgt$secwgt>0,riskfwgt$secwgt*(1+riskfwgt$ub),riskfwgt$secwgt*(1-riskfwgt$ub))
+        riskfwgt <- riskfwgt[,c("sector","secwgt","wgtlb","wgtub")]
         totwgt <- rbind(riskfwgt,secwgt)
         rownames(totwgt) <- totwgt$sector
         totwgt <- totwgt[allriskfname,]
         
+        #prepare matrix data
+        alphamat <- as.matrix(tmp.TSF[,alphafname])
+        riskmat <- as.matrix(tmp.TSF[,allriskfname])
+        rownames(alphamat) <- tmp.TSF$stockID
+        rownames(riskmat) <- tmp.TSF$stockID
+        
         ret <- t(as.matrix(tmp.alphaf$fmean))%*% t(alphamat)
-        ret <- ret*riskaversion
+        ret <- ret*riskavr
         Fcovmat <- as.matrix(tmp.Fcov)
         Deltamat <- data.frame(stockID=rownames(alphamat))
         Deltamat <- merge(Deltamat,tmp.Delta[,-1],by='stockID',all.x = T)
@@ -642,10 +667,15 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind',
         nstock <- dim(Dmat)[1]
         Amat <- cbind(1,Amat,diag(x=1,nstock),diag(x=-1,nstock))#control weight
         bvec <- c(1,totwgt$wgtlb,-1*totwgt$wgtub,rep(0,nstock),rep(-0.01,nstock))
-        system.time(res <- solve.QP(Dmat,ret,Amat,bvec=bvec,meq=1))
+        system.time(res <- solve.QP(Dmat,ret,Amat,bvec,meq=1))
+        
         res$solution[abs(res$solution) <= 1e-3] <- 0
-        tmp <- data.frame(stockID=rownames(alphamat),wgt=res$solution)
-        tmp <- tmp[tmp$wgt>0,]
+        tmp <- data.frame(date=as.Date(i),stockID=rownames(alphamat),wgt=res$solution)
+        tmp <- merge(tmp,benchmarkdata[,c("date","stockID","wgt")],by = c("date","stockID"),all.x = T)
+        colnames(tmp) <-c( "date","stockID","wgtopt","wgtinbench")
+        tmp.sec <- getSectorID(tmp[,c('date','stockID')],sectorAttr = list(33,1))
+        tmp.sec[is.na(tmp.sec$sector),"sector"] <- 'ES33510000'
+        tmp <- merge(tmp,tmp.sec,by=c('date','stockID'))
         if(i==dates[1]){
           result <- tmp
         }else{
@@ -658,10 +688,6 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,riskaversion=1,constr=c('IndSty','Ind',
     
   }
 
-
-  
-  
-  
   
   tpassed <- proc.time()-ptm
   tpassed <- tpassed[3]

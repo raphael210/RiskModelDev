@@ -1,6 +1,6 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
 RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-03-31'),'month')
-TS <- getTS(RebDates,'EI000985')
+TS <- getTS(RebDates,'EI000906')
 
 riskfactorLists <- buildFactorLists(
   buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
@@ -11,11 +11,10 @@ alphafactorLists1 <- buildFactorLists(
   buildFactorList("gf.G_scissor_Q",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.GG_NP_Q",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.GG_OR_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_OCF",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.G_SCF_Q",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.G_MLL_Q",factorStd="norm",factorNA = "median")
 )
-factorIDs <- c("F000003","F000004","F000006","F000007","F000008","F000009","F000010")
+factorIDs <- c("F000003","F000004","F000008","F000009","F000010")
 alphafactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
 alphafactorLists <- c(alphafactorLists1,alphafactorLists2)
 
@@ -37,5 +36,29 @@ alphaf <- calcAlphaf(alphaf)
 TSF <- subset(TSFR,date>=min(Fcov$date),select = -c(nextRebalanceDate,periodrtn))
 alphaf <- alphaf[alphaf$date>=min(Fcov$date),]
 
-optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='Ind')
+tmp <- sapply(riskfactorLists,'[[','factorName')
+riskfexp=data.frame(sector=tmp,lb=rep(-0.1,length(tmp)),ub=rep(0.1,length(tmp)))
+riskfexp[riskfexp$sector=='ln_mkt_cap_','lb'] <- -10
+riskfexp[riskfexp$sector=='ln_mkt_cap_','ub'] <- 0.3
+
+optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='IndSty',riskavr = 1,riskfexp)
+
+
+
+
+
+b <- data.frame(stockID=rownames(alphamat))
+b <- merge(b,benchmarkdata[,2:3],by='stockID',all.x = T)
+b[is.na(b$wgt),'wgt'] <- 0
+b$wgt <- b$wgt/sum(b$wgt)
+b <- as.matrix(b$wgt)
+
+c(t(Amat)%*%b)
+c(t(Amat)%*%b >bvec)
+ret%*%b
+t(b)%*%Dmat%*%b
+(0.5*t(b)%*%Dmat%*%b)/(-1*ret%*%b)
+
+b <- as.matrix(res$solution)
+b[abs(b)<0.001] <- 0
 
