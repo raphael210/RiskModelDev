@@ -606,7 +606,7 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,constr=c('IndSty','Ind','IndStyTE'),ben
     }
   }else if(constr=='IndSty'){
     allriskfname <- c(riskfname,indfname)
-    riskfexp <- list(...)
+    riskfexp <- as.data.frame(list(...))
     for(i in dates){
         cat('finishing ',round(match(i,dates)/length(dates)*100),'%.\n')    
         tmp.TSF <- TSF[TSF$date==i,]
@@ -691,7 +691,8 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,constr=c('IndSty','Ind','IndStyTE'),ben
   
   tpassed <- proc.time()-ptm
   tpassed <- tpassed[3]
-  cat("This function running time is ",tpassed,"s.")
+  cat("This function running time is ",tpassed/60,"min.")
+  return(result)
 }
 
 

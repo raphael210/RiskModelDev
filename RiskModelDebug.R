@@ -1,6 +1,6 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
-RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-03-31'),'month')
-TS <- getTS(RebDates,'EI000906')
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2015-08-31'),'month')
+TS <- getTS(RebDates,'EI000905')
 
 riskfactorLists <- buildFactorLists(
   buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
@@ -41,11 +41,30 @@ riskfexp=data.frame(sector=tmp,lb=rep(-0.1,length(tmp)),ub=rep(0.1,length(tmp)))
 riskfexp[riskfexp$sector=='ln_mkt_cap_','lb'] <- -10
 riskfexp[riskfexp$sector=='ln_mkt_cap_','ub'] <- 0.3
 
-optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='IndSty',riskavr = 1,riskfexp)
+optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='IndSty',benchmark='EI000905',riskavr = 10,indfexp=0.05,riskfexp)
 
 
-
-
+#calculate portfolio return
+optpot <- optimizedwgt[optimizedwgt$wgtopt>0,c('date','stockID','wgtopt')]
+TSR <- TSFR[,c('date','stockID','nextRebalanceDate','periodrtn')]
+optpot <- merge(optpot,TSR,by=c('date','stockID'),all.x = T)
+optpot <- optpot[!is.na(optpot$nextRebalanceDate),]
+dates <- unique(optpot$nextRebalanceDate)
+for(i in dates){
+  tmp <- optpot[optpot$nextRebalanceDate==i,]
+  tmp.df <- data.frame(date=i,rtn=t(as.matrix(tmp$wgtopt)) %*% as.matrix(tmp$periodrtn))
+  if(i==dates[1]){
+    potrtn <- tmp.df
+  }else{
+    potrtn <- rbind(potrtn,tmp.df)
+  }
+  
+}
+potrtn$date <- as.Date(potrtn$date)
+potrtn <- as.xts(potrtn$rtn,order.by = potrtn$date)
+ggplot.WealthIndex(potrtn)
+re <- getrtn.bmk(potrtn, bmk = "EI000905")
+ggplot.WealthIndex(re)
 
 b <- data.frame(stockID=rownames(alphamat))
 b <- merge(b,benchmarkdata[,2:3],by='stockID',all.x = T)
