@@ -7,6 +7,25 @@ suppressMessages(library(stringr))
 suppressMessages(library(quadprog))
 suppressMessages(library(nloptr))
 
+
+# This function is used to fix bugs in table LC_IndexComponentsWeight in local db.
+fix.lcdb.indexcomperr <- function(){
+  qr <- "delete from LC_IndexComponentsWeight
+  where IndexID in ('EI000905','EI000906') and EndDate=20150930"
+  dbSendQuery(db.local(), qr)
+  qr <- "SELECT 'EI'+s1.SecuCode 'IndexID','EQ'+s2.SecuCode 'SecuID',
+  convert(VARCHAR(9),l.[EndDate],112) 'EndDate',l.[Weight],l.[UpdateTime]
+  FROM [JYDB].[dbo].[LC_IndexComponentsWeight] l
+  LEFT join JYDB.dbo.SecuMain s1 on l.IndexCode=s1.InnerCode
+  LEFT join JYDB.dbo.SecuMain s2 on l.InnerCode=s2.InnerCode
+  where s1.SecuCode in('000905','000906') and l.EndDate='2015-09-30'
+  order by s1.SecuCode,s2.SecuCode"
+  re <- sqlQuery(db.jy(),qr)
+  dbWriteTable(db.local(),"LC_IndexComponentsWeight",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
+  return('Done')
+}
+
+
 #' add.index.lcdb
 #'
 #' Add a index to local database
@@ -82,6 +101,38 @@ add.index.lcdb <- function(indexID="000985.SH"){
   dbWriteTable(db.local(),"LC_IndexComponent",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
   return("Done!")
 }
+
+
+#' CT_FactorLists_amtao
+#'
+#' build a new table similar to table CT_FactorLists in local db to store factors builded by amtao.
+#' @author Andrew Dow
+#' @param factor.df is a data frame contains factors' detail info.
+#' @return nothing
+#' @examples 
+#' factor.df <- data.frame(factorID='F000021',      
+#' factorName='liquidity',       
+#' factorFun="gf.ln_mkt_cap",      
+#' factorPar='', 
+#' factorDir=-1, 
+#' factorType='', 
+#' factorDesc='')
+#' CT_FactorLists_amtao(factor.df)
+CT_FactorLists_amtao <- function(factor.df){
+  #check whether table CT_FactorLists_amtao exists
+  re <- dbExistsTable(db.local(),'CT_FactorLists_amtao')
+  if(re){
+    #exist
+    dbWriteTable(db.local(),"CT_FactorLists_amtao",factor.df,overwrite=FALSE,append=TRUE,row.names=FALSE)
+    
+  }else{
+    #not exist
+    dbWriteTable(db.local(),"CT_FactorLists_amtao",factor.df)
+  }
+  return('Done!')
+}
+
+
 
 #' build.liquid.factor
 #'
@@ -698,20 +749,6 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,constr=c('IndSty','Ind','IndStyTE'),ben
 
 
 
-fix.lcdb.indexcomperr <- function(){
-  qr <- "delete from LC_IndexComponentsWeight
-  where IndexID in ('EI000905','EI000906') and EndDate=20150930"
-  dbSendQuery(db.local(), qr)
-  qr <- "SELECT 'EI'+s1.SecuCode 'IndexID','EQ'+s2.SecuCode 'SecuID',
-  convert(VARCHAR(9),l.[EndDate],112) 'EndDate',l.[Weight],l.[UpdateTime]
-  FROM [JYDB].[dbo].[LC_IndexComponentsWeight] l
-  LEFT join JYDB.dbo.SecuMain s1 on l.IndexCode=s1.InnerCode
-  LEFT join JYDB.dbo.SecuMain s2 on l.InnerCode=s2.InnerCode
-  where s1.SecuCode in('000905','000906') and l.EndDate='2015-09-30'
-  order by s1.SecuCode,s2.SecuCode"
-  re <- sqlQuery(db.jy(),qr)
-  dbWriteTable(db.local(),"LC_IndexComponentsWeight",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
-  return('Done')
-}
+
 
 

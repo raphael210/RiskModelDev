@@ -11,7 +11,7 @@ alphafactorLists1 <- buildFactorLists(
   buildFactorList("gf.G_scissor_Q",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.GG_NP_Q",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.GG_OR_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_SCF_Q",factorStd="norm",factorNA = "median"),
+  buildFactorList("gf.G_SCF_Q", factorStd="norm",factorNA = "median"),
   buildFactorList("gf.G_MLL_Q",factorStd="norm",factorNA = "median")
 )
 factorIDs <- c("F000003","F000004","F000008","F000009","F000010")
@@ -41,7 +41,7 @@ riskfexp=data.frame(sector=tmp,lb=rep(-0.05,length(tmp)),ub=rep(0.05,length(tmp)
 riskfexp[riskfexp$sector=='ln_mkt_cap_','lb'] <- -1
 riskfexp[riskfexp$sector=='ln_mkt_cap_','ub'] <- 0.1
 
-optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='IndSty',benchmark='EI000905',riskavr = 10,indfexp=0.05,riskfexp)
+optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='IndSty',benchmark='EI000905',riskavr = 100,indfexp=0.05,riskfexp)
 
 
 #calculate portfolio return
