@@ -696,3 +696,22 @@ OptWgt <- function(TSF,alphaf,Fcov,Delta,constr=c('IndSty','Ind','IndStyTE'),ben
 }
 
 
+
+
+fix.lcdb.indexcomperr <- function(){
+  qr <- "delete from LC_IndexComponentsWeight
+  where IndexID in ('EI000905','EI000906') and EndDate=20150930"
+  dbSendQuery(db.local(), qr)
+  qr <- "SELECT 'EI'+s1.SecuCode 'IndexID','EQ'+s2.SecuCode 'SecuID',
+  convert(VARCHAR(9),l.[EndDate],112) 'EndDate',l.[Weight],l.[UpdateTime]
+  FROM [JYDB].[dbo].[LC_IndexComponentsWeight] l
+  LEFT join JYDB.dbo.SecuMain s1 on l.IndexCode=s1.InnerCode
+  LEFT join JYDB.dbo.SecuMain s2 on l.InnerCode=s2.InnerCode
+  where s1.SecuCode in('000905','000906') and l.EndDate='2015-09-30'
+  order by s1.SecuCode,s2.SecuCode"
+  re <- sqlQuery(db.jy(),qr)
+  dbWriteTable(db.local(),"LC_IndexComponentsWeight",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
+  return('Done')
+}
+
+

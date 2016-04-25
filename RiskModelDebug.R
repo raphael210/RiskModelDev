@@ -1,5 +1,5 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
-RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2015-08-31'),'month')
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-03-31'),'month')
 TS <- getTS(RebDates,'EI000905')
 
 riskfactorLists <- buildFactorLists(
@@ -37,47 +37,21 @@ TSF <- subset(TSFR,date>=min(Fcov$date),select = -c(nextRebalanceDate,periodrtn)
 alphaf <- alphaf[alphaf$date>=min(Fcov$date),]
 
 tmp <- sapply(riskfactorLists,'[[','factorName')
-riskfexp=data.frame(sector=tmp,lb=rep(-0.1,length(tmp)),ub=rep(0.1,length(tmp)))
-riskfexp[riskfexp$sector=='ln_mkt_cap_','lb'] <- -10
-riskfexp[riskfexp$sector=='ln_mkt_cap_','ub'] <- 0.3
+riskfexp=data.frame(sector=tmp,lb=rep(-0.05,length(tmp)),ub=rep(0.05,length(tmp)))
+riskfexp[riskfexp$sector=='ln_mkt_cap_','lb'] <- -1
+riskfexp[riskfexp$sector=='ln_mkt_cap_','ub'] <- 0.1
 
 optimizedwgt <- OptWgt(TSF,alphaf,Fcov,Delta,constr='IndSty',benchmark='EI000905',riskavr = 10,indfexp=0.05,riskfexp)
 
 
 #calculate portfolio return
 optpot <- optimizedwgt[optimizedwgt$wgtopt>0,c('date','stockID','wgtopt')]
-TSR <- TSFR[,c('date','stockID','nextRebalanceDate','periodrtn')]
-optpot <- merge(optpot,TSR,by=c('date','stockID'),all.x = T)
-optpot <- optpot[!is.na(optpot$nextRebalanceDate),]
-dates <- unique(optpot$nextRebalanceDate)
-for(i in dates){
-  tmp <- optpot[optpot$nextRebalanceDate==i,]
-  tmp.df <- data.frame(date=i,rtn=t(as.matrix(tmp$wgtopt)) %*% as.matrix(tmp$periodrtn))
-  if(i==dates[1]){
-    potrtn <- tmp.df
-  }else{
-    potrtn <- rbind(potrtn,tmp.df)
-  }
-  
-}
-potrtn$date <- as.Date(potrtn$date)
-potrtn <- as.xts(potrtn$rtn,order.by = potrtn$date)
-ggplot.WealthIndex(potrtn)
-re <- getrtn.bmk(potrtn, bmk = "EI000905")
+colnames(optpot) <- c("date","stockID","wgt")
+PB <- port.backtest(optpot,holdingEndT = Sys.Date()-3)
+re <- getrtn.LBH(PB,"EI000905",fee.long = 0.001)
 ggplot.WealthIndex(re)
+rtn.summary(re)
 
-b <- data.frame(stockID=rownames(alphamat))
-b <- merge(b,benchmarkdata[,2:3],by='stockID',all.x = T)
-b[is.na(b$wgt),'wgt'] <- 0
-b$wgt <- b$wgt/sum(b$wgt)
-b <- as.matrix(b$wgt)
 
-c(t(Amat)%*%b)
-c(t(Amat)%*%b >bvec)
-ret%*%b
-t(b)%*%Dmat%*%b
-(0.5*t(b)%*%Dmat%*%b)/(-1*ret%*%b)
 
-b <- as.matrix(res$solution)
-b[abs(b)<0.001] <- 0
 
