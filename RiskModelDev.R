@@ -6,7 +6,13 @@ suppressMessages(library(plyr))
 suppressMessages(library(stringr))
 suppressMessages(library(quadprog))
 suppressMessages(library(nloptr))
+suppressMessages(library(RODBC))
+suppressMessages(library(RSQLite))
+suppressMessages(library(ggplot2))
+suppressMessages(library(xts))
 
+tsInclude()
+tsConnect()
 
 # This function is used to fix bugs in table LC_IndexComponentsWeight in local db.
 fix.lcdb.indexcomperr <- function(){
@@ -33,72 +39,127 @@ fix.lcdb.indexcomperr <- function(){
 #' @param indexID is the indexID
 #' @return nothing
 #' @examples 
-#' add.index.lcdb(indexID="000985.SH")
-add.index.lcdb <- function(indexID="000985.SH"){
+#' add.index.lcdb(indexID="EI801003")
+#' add.index.lcdb(indexID="EI000985")
+add.index.lcdb <- function(indexID="EI801003"){
   #check whether the index in local db
-  qr <- paste("select * from SecuMain where ID="
-              ,str_c("'EI",str_sub(indexID,1,6),"'"),sep="")
-  re <- dbGetQuery(db.local(),qr)
-  if(nrow(re)>0) return("Already in local database!")
-  
-  #part 1 update local SecuMain
-  qr <- paste("select ID,InnerCode,CompanyCode,SecuCode,SecuAbbr,SecuMarket,  
-              ListedSector,ListedState,JSID 'UpdateTime',SecuCode 'StockID_TS',
-              SecuCategory,ListedDate,SecuCode 'StockID_wind'
-              from SecuMain WHERE SecuCode=",
-              str_c("'",str_sub(indexID,start = 1,end = 6),"'"),
-              " and SecuCategory=4",sep='')
-  re <- sqlQuery(db.jy(),qr)
-  re <- transform(re,ID=str_c("EI",str_sub(indexID,1,6)),
-                  SecuCode=str_pad(SecuCode,6,pad='0'),
-                  StockID_TS=str_c(str_sub(indexID,8,-1),str_sub(indexID,1,6)),
-                  StockID_wind=indexID,
-                  ListedDate=rdate2int(ListedDate))
-  dbWriteTable(db.local(),"SecuMain",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
-  
-  #part 2 update local LC_IndexComponent
-  suppressMessages(library(timeDate))
-  suppressMessages(library(WindR))
-  w.start(showmenu = F)
-  dates <- seq.Date(as.Date('2004-12-01'),Sys.Date(),by="6 month")
-  dates <- as.Date(timeNthNdayInMonth(dates, nday = 5, nth = 2, format = "%Y-%m-%d"))
-  dates <- trday.nearby(dates,-1)
-  
-  subfun <- function(date){
-    tmp<-w.wset('SectorConstituent',date=date,windcode=indexID)$Data
-    return(tmp)
-  }
-  oridata<-ldply(dates,subfun)
-  oridata$date <- w.asDateTime(oridata$date,asdate = T)
-  oridata <- oridata[,c('date','wind_code')]
-  oridata$wind_code <- str_c('EQ',str_sub(oridata$wind_code,1,6))
-  dates <- unique(oridata$date)
-  for(i in 1:length(dates)){
-    if(i==1){
-      tmp <- oridata[oridata$date==dates[i],]
-      re <- data.frame(indexID=str_c("EI",str_sub(indexID,1,6)),SecuID=tmp$wind_code,
-                       InDate=tmp$date,OutDate=as.Date('1900-01-01'),Flag=1,UpdateTime=tmp$date)
-    }else{
-      tmp1 <- oridata[oridata$date==dates[i-1],]
-      tmp2 <- oridata[oridata$date==dates[i],]
-      outstock <- setdiff(tmp1$wind_code,tmp2$wind_code)
-      instock <- setdiff(tmp2$wind_code,tmp1$wind_code)
-      if(length(outstock)>0){
-        re[(re$SecuID %in% outstock)&re$Flag==1,'OutDate'] <- dates[i]
-        re[(re$SecuID %in% outstock)&re$Flag==1,'UpdateTime'] <- dates[i]
-        re[(re$SecuID %in% outstock)&re$Flag==1,'Flag'] <- 0
-      }
-      if(length(instock)>0){
-        tmp2 <- tmp2[tmp2$wind_code %in% instock,]
-        tmp.re <- data.frame(indexID=str_c("EI",str_sub(indexID,1,6)),SecuID=tmp2$wind_code,
-                             InDate=tmp2$date,OutDate=as.Date('1900-01-01'),Flag=1,UpdateTime=tmp2$date)
-        re <- rbind(re,tmp.re)
+  if(indexID=='EI000985'){
+    qr <- paste("select * from SecuMain where ID="
+                ,str_c("'EI",str_sub(indexID,3,8),"'"),sep="")
+    re <- dbGetQuery(db.local(),qr)
+    if(nrow(re)>0) return("Already in local database!")
+    
+    #part 1 update local SecuMain
+    qr <- paste("select ID,InnerCode,CompanyCode,SecuCode,SecuAbbr,SecuMarket,  
+                ListedSector,ListedState,JSID 'UpdateTime',SecuCode 'StockID_TS',
+                SecuCategory,ListedDate,SecuCode 'StockID_wind'
+                from SecuMain WHERE SecuCode=",
+                str_c("'",str_sub(indexID,start = 3,end = 8),"'"),
+                " and SecuCategory=4")
+    re <- sqlQuery(db.jy(),qr)
+    re <- transform(re,ID=indexID,
+                    SecuCode='000985',
+                    StockID_TS='SH000985',
+                    StockID_wind='000985.SH')
+    dbWriteTable(db.local(),"SecuMain",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
+    
+    #part 2 update local LC_IndexComponent
+    qr <- "SELECT 'EI000985' 'IndexID','EQ'+s2.SecuCode 'SecuID',
+          convert(varchar(8),l.[InDate],112) 'InDate',
+          convert(varchar(8),l.[OutDate],112) 'OutDate',
+          l.[Flag],l.[XGRQ] 'UpdateTime',
+          convert(varchar(8),s2.ListedDate,112) 'IPODate'
+          FROM jydb.dbo.LC_IndexComponent l
+          inner join jydb.dbo.SecuMain s1 on l.IndexInnerCode=s1.InnerCode and s1.SecuCode='801003'
+          LEFT join jydb.dbo.SecuMain s2 on l.SecuInnerCode=s2.InnerCode"
+    re <- sqlQuery(db.jy(),qr,stringsAsFactors=F) 
+    re <- transform(re,
+                    InDate=intdate2r(InDate),
+                    OutDate=intdate2r(OutDate),
+                    IPODate=intdate2r(IPODate))
+    re[(re$InDate-re$IPODate)<90,'InDate'] <- trday.offset(re[(re$InDate-re$IPODate)<90,'IPODate'],by = months(3))
+    re <- re[is.na(re$OutDate-re$InDate) | (re$OutDate-re$InDate)>30,]
+    re <- re[substr(re$SecuID,1,3) %in% c('EQ0','EQ3','EQ6'),]
+    re <- re[,c("IndexID","SecuID","InDate","OutDate","Flag","UpdateTime")]
+    
+    qr <- "select 'EQ'+s.SecuCode 'SecuID',st.SpecialTradeType,
+          ct.MS,convert(varchar(8),st.InfoPublDate,112) 'InfoPublDate',
+          convert(varchar(8),st.SpecialTradeTime,112) 'SpecialTradeTime'
+          from jydb.dbo.LC_SpecialTrade st,jydb.dbo.SecuMain s,jydb.dbo.CT_SystemConst ct
+          where st.InnerCode=s.InnerCode and SecuCategory=1
+          and st.SpecialTradeType=ct.DM and ct.LB=1185 and st.SpecialTradeType in(1,2,5,6)
+          order by s.SecuCode"
+    st <- sqlQuery(db.jy(),qr,stringsAsFactors=F)
+    st <- st[substr(st$SecuID,1,3) %in% c('EQ0','EQ3','EQ6'),]
+    st$InDate <- ifelse(st$SpecialTradeType %in% c(2,6),st$SpecialTradeTime,NA)
+    st$OutDate <- ifelse(st$SpecialTradeType %in% c(1,5),st$InfoPublDate,NA)
+    st$InDate <- intdate2r(st$InDate)
+    st$OutDate <- intdate2r(st$OutDate)
+    st <- st[,c("SecuID","InDate","OutDate")]
+    
+    tmp <- rbind(re[,c("SecuID","InDate","OutDate")],st)
+    tmp <- melt(tmp,id=c('SecuID'))
+    tmp <- tmp[!(is.na(tmp$value) & tmp$variable=='InDate'),]
+    tmp <- unique(tmp)
+    tmp[is.na(tmp$value),'value'] <- as.Date('2100-01-01')
+    tmp <- arrange(tmp,SecuID,value)
+    
+    tmp$flag <- c(1)
+    for(i in 2: nrow(tmp)){
+      if(tmp$SecuID[i]==tmp$SecuID[i-1] && tmp$variable[i]==tmp$variable[i-1] && tmp$variable[i]=='InDate'){
+        tmp$flag[i-1] <- 0
+      }else if(tmp$SecuID[i]==tmp$SecuID[i-1] && tmp$variable[i]==tmp$variable[i-1] && tmp$variable[i]=='OutDate'){
+        tmp$flag[i] <- 0
+      }else{
+        next
       }
     }
+    tmp <- tmp[tmp$flag==1,c("SecuID","variable","value")]
+    tmp <- arrange(tmp,SecuID,value)
+    tmp1 <- tmp[tmp$variable=='InDate',]
+    tmp2 <- tmp[tmp$variable=='OutDate',]
+    tmp <- cbind(tmp1[,c("SecuID","value")],tmp2[,"value"])
+    colnames(tmp) <- c("SecuID","InDate","OutDate")
+    tmp[tmp$OutDate==as.Date('2100-01-01'),'OutDate'] <- NA
+    tmp$IndexID <- 'EI000985'
+    tmp$Flag <- ifelse(is.na(tmp$OutDate),1,0)
+    tmp$UpdateTime <- Sys.time()
+    tmp$InDate <- rdate2int(tmp$InDate)
+    tmp$OutDate <- rdate2int(tmp$OutDate )
+    tmp <- tmp[,c("IndexID","SecuID","InDate","OutDate","Flag","UpdateTime")]
+    
+    dbWriteTable(db.local(),"LC_IndexComponent",tmp,overwrite=FALSE,append=TRUE,row.names=FALSE)
+    
+    
+    
+  }else{
+    qr <- paste("select * from SecuMain where ID="
+                ,str_c("'EI",str_sub(indexID,3,8),"'"),sep="")
+    re <- dbGetQuery(db.local(),qr)
+    if(nrow(re)>0) return("Already in local database!")
+    
+    #part 1 update local SecuMain
+    qr <- paste("select ID,InnerCode,CompanyCode,SecuCode,SecuAbbr,SecuMarket,  
+                ListedSector,ListedState,JSID 'UpdateTime',SecuCode 'StockID_TS',
+                SecuCategory,ListedDate,SecuCode 'StockID_wind'
+                from SecuMain WHERE SecuCode=",
+                str_c("'",str_sub(indexID,start = 3,end = 8),"'"),
+                " and SecuCategory=4",sep='')
+    re <- sqlQuery(db.jy(),qr)
+    re <- transform(re,ID=indexID)
+    dbWriteTable(db.local(),"SecuMain",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
+    
+    #part 2 update local LC_IndexComponent
+    qr <- paste("SELECT 'EI'+s1.SecuCode 'IndexID','EQ'+s2.SecuCode 'SecuID',
+                convert(varchar(8),l.[InDate],112) 'InDate',
+                convert(varchar(8),l.[OutDate],112) 'OutDate',l.[Flag],l.[XGRQ] 'UpdateTime'  
+                FROM [JYDB].[dbo].[LC_IndexComponent] l
+                inner join JYDB.dbo.SecuMain s1 on l.IndexInnerCode=s1.InnerCode and s1.SecuCode=",str_c("'",str_sub(indexID,start = 3,end = 8),"'"),
+                " LEFT join JYDB.dbo.SecuMain s2 on l.SecuInnerCode=s2.InnerCode")
+    re <- sqlQuery(db.jy(),qr)  
+    dbWriteTable(db.local(),"LC_IndexComponent",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
   }
-  re[re$OutDate=='1900-01-01',"OutDate"] <- NA
-  re <- transform(re,InDate=rdate2int(InDate),OutDate=rdate2int(OutDate))
-  dbWriteTable(db.local(),"LC_IndexComponent",re,overwrite=FALSE,append=TRUE,row.names=FALSE)
+
   return("Done!")
 }
 
@@ -134,71 +195,500 @@ CT_FactorLists_amtao <- function(factor.df){
 
 
 
-#' build.liquid.factor
-#'
-#' create liquidity factor in local db and update the factor
-#' @author Andrew Dow
-#' @param type indicates whether to create the new factor or to update the factor.
-#' @return nothing
-#' @examples 
-#' build.liquid.factor("new")
-#' build.liquid.factor("update")
-build.liquid.factor <- function(type=c("new","update")){
-  time <- Sys.time()
-  type <- match.arg(type)
-  if(type=='new'){
-    qr <- "select t.ID,t.TradingDay,t.TurnoverVolume,t.NonRestrictedShares 
-    from QT_DailyQuote t
-    where t.TradingDay>=20050101"
-    re <- dbGetQuery(db.local(),qr)
+
+lcdb.build.QT_FactorScore_amtao <- function(factordf=data.frame(factorID=c('F000021','F000022','F000023'),
+                                                                factorName=c('liquidity','beta','IVR'),
+                                                                stringsAsFactors=FALSE)){
+  for(i in 1:nrow(factordf)){
+    if(factordf$factorName[i]=='liquidity'){
+      cat('building ',factordf$factorName[i],' factor...\n')
+      con <- db.local()
+      re <- dbReadTable(con, "QT_DailyQuote", select.cols="ID,TradingDay,TurnoverVolume,NonRestrictedShares")
+      re <- re[re$TradingDay>=20050101,]
+      re$TurnoverRate <- re$TurnoverVolume/(re$NonRestrictedShares*10000)
+      re <- re[,c("ID","TradingDay","TurnoverRate")]
+      re$TurnoverRate <-abs(re$TurnoverRate) 
+      re <- re[substr(re$ID, 1,3) %in% c('EQ0',"EQ6","EQ3"),]
+      re <- arrange(re,ID,TradingDay)
+      
+      liquidity <- ddply(re,"ID",mutate,STOM=rollsum(TurnoverRate,21,fill=NA,align = 'right'))
+      liquidity <- subset(liquidity,!is.na(liquidity$STOM))
+      liquidity$STOM <- log(liquidity$STOM)
+      liquidity[liquidity$TurnoverRate==0,"STOM"] <- NA
+      liquidity <- liquidity[,c("ID","TradingDay","STOM")]
+      colnames(liquidity)[3] <- factordf$factorID[i]
+      
+      result <- liquidity
+    }else if(factordf$factorName[i]=='beta'){
+      cat('building ',factordf$factorName[i],' factor...\n')
+      re <- dbReadTable(con, "QT_DailyQuote", select.cols="ID,TradingDay,DailyReturn")
+      re <- re[re$TradingDay>=20031101,]
+      re <- arrange(re,ID,TradingDay)
+      
+      qr <- "SELECT convert(varchar(8),q.[TradingDay],112) 'TradingDay',
+              q.ClosePrice/q.PrevClosePrice-1 'indexRtn'
+              FROM QT_IndexQuote q,SecuMain s
+              where q.InnerCode=s.InnerCode AND s.SecuCode='801003'
+              and q.TradingDay>='2003-11-01' and q.TradingDay<='2015-12-31'
+              order by q.TradingDay"
+      index <- sqlQuery(db.jy(),qr)
+      
+      tmp <- as.data.frame(table(re$ID))
+      tmp <- tmp[tmp$Freq>=250,]
+      re <- re[re$ID%in%tmp$Var1,]
+      stocks <- unique(re$ID)
+      pb <- txtProgressBar(style = 3)
+      for(j in 1:length(stocks)){
+        tmp <- re[re$ID==stocks[j],]
+        tmp <- merge.x(tmp,index,by='TradingDay')
+        beta.tmp <- rollapply(tmp[,c('DailyReturn','indexRtn')], width = 250,
+                              function(x) coef(lm(DailyReturn ~ indexRtn, data = as.data.frame(x))),
+                              by.column = FALSE, align = "right")
+        beta.tmp <- as.data.frame(beta.tmp)
+        beta.tmp$ID <- stocks[j]
+        beta.tmp$TradingDay <- tmp$TradingDay[250:nrow(tmp)]
+        beta.tmp <- beta.tmp[,c("ID","TradingDay","indexRtn")]
+        colnames(beta.tmp)[3] <- factordf$factorID[i]
+        if(j==1){
+          beta <- beta.tmp
+        }else{
+          beta <- rbind(beta,beta.tmp)
+        }
+        setTxtProgressBar(pb, j/length(stocks))
+      }
+      close(pb)
+      result <- merge.x(result,beta,by=c('ID','TradingDay'))
+      result <- result[,c("ID","TradingDay","F000021","F000022")]
+    }else if(factordf$factorName[i]=='IVR'){
+      cat('building ',factordf$factorName[i],' factor...\n')
+      begT <- as.Date('2005-01-31')
+      endT <- Sys.Date()-1
+      dates <- getRebDates(begT,endT)
     
-    re$TurnoverRate <- re$TurnoverVolume/(re$NonRestrictedShares*10000)
-    re <- re[,c("ID","TradingDay","TurnoverRate")]
-    re <- arrange(re,ID,TradingDay)
-    re$TurnoverRate <-abs(re$TurnoverRate) 
-    
-    tmp <- as.data.frame(table(re$ID))
-    tmp <- tmp[tmp$Freq>=21,]
-    tmp <- tmp[substr(tmp$Var1, 1,3) %in% c('EQ0',"EQ6","EQ3"),]
-    re <- re[re$ID %in% tmp$Var1,]
-    
-    result <- ddply(re,"ID",mutate,STOM=rollsum(TurnoverRate,21,fill=NA,align = 'right'))
-    result <- subset(result,!is.na(result$STOM))
-    result$STOM <- log(result$STOM)
-    result[result$TurnoverRate==0,"STOM"] <- NA
-    result <- melt(result,id=c("ID","TradingDay"))
-    colnames(result) <- c("ID","TradingDay","FactorName","FactorScore")
-    dbWriteTable(db.local(),"QT_FactorScore_Liquidity",result)
-  }else{
-    date <- dbGetQuery(db.local(),"select max(TradingDay) 'date' from QT_FactorScore_Liquidity")
-    date <- date$date
-    
-    qr <- paste("select t.ID,t.TradingDay,t.TurnoverVolume,t.NonRestrictedShares 
-    from QT_DailyQuote t
-    where t.TradingDay>=",rdate2int(intdate2r(date)-60))
-    re <- sqlQuery(db.quant(),qr)
-    
-    re$TurnoverRate <- re$TurnoverVolume/(re$NonRestrictedShares*10000)
-    re <- re[,c("ID","TradingDay","TurnoverRate")]
-    re <- arrange(re,ID,TradingDay)
-    re$TurnoverRate <-abs(re$TurnoverRate) 
-    
-    tmp <- as.data.frame(table(re$ID))
-    tmp <- tmp[tmp$Freq>=21,]
-    tmp <- tmp[substr(tmp$Var1, 1,3) %in% c('EQ0',"EQ6","EQ3"),]
-    re <- re[re$ID %in% tmp$Var1,]
-    
-    result <- ddply(re,"ID",mutate,STOM=rollsum(TurnoverRate,21,fill=NA,align = 'right'))
-    result <- subset(result,!is.na(result$STOM))
-    result$STOM <- log(result$STOM)
-    result <- subset(result,TradingDay>date)
-    result[result$TurnoverRate==0,"STOM"] <- NA
-    result <- melt(result,id=c("ID","TradingDay"))
-    colnames(result) <- c("ID","TradingDay","FactorName","FactorScore")
-    dbWriteTable(db.local(),"QT_FactorScore_Liquidity",result,overwrite=FALSE,append=TRUE,row.names=FALSE)
+      getSMB <- function(begT,endT,indexID = "EI000985"){
+        RebDate <- getRebDates(begT,endT)
+        TS <- getTS(RebDate, indexID)
+        TSF <- gf_lcfs(TS,'F000002')
+        TSF <- RFactorModel:::factor.na(TSF,method='median')
+        TSF <- ddply(TSF, ~ date, mutate, group = as.numeric(cut_number(factorscore,3)))
+        tmp.TS1 <- TSF[TSF$group==1,c("date","stockID")]
+        tmp.TS1 <- ddply(tmp.TS1, ~ date, mutate, recnum = seq(1,length(date)))
+        tmp.TS3 <- TSF[TSF$group==3,c("date","stockID")]
+        tmp.TS3 <- ddply(tmp.TS3, ~ date, mutate, recnum = seq(1,length(date)))
+        
+        tmp <- ddply(tmp.TS1,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS1 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS1 <- ddply(TS1, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS1 <- merge.x(TS1,tmp.TS1)
+        TS1 <- TS1[,c("datenew","stockID")]
+        colnames(TS1) <- c("date","stockID")
+        
+        tmp <- ddply(tmp.TS3,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS3 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS3 <- ddply(TS3, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS3 <- merge.x(TS3,tmp.TS3)
+        TS3 <- TS3[,c("datenew","stockID")]
+        colnames(TS3) <- c("date","stockID")
+        
+        TSR1 <- getTSR(TS1)
+        TSR3 <- getTSR(TS3)
+        R1 <- TSR1[!is.na(TSR1$date_end),c("date_end","periodrtn")]
+        R1 <- R1[!is.na(R1$periodrtn),]
+        R1 <- ddply(R1,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        R3 <- TSR3[!is.na(TSR3$date_end),c("date_end","periodrtn")]
+        R3 <- R3[!is.na(R3$periodrtn),]
+        R3 <- ddply(R3,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        
+        rtn <- merge(R1,R3,by='date_end')
+        colnames(rtn) <- c('date','S','B')
+        rtn$SMB <- rtn$S-rtn$B
+        rtn <- rtn[,c('date','SMB')]
+        return(rtn)
+      }
+      
+      getHML <- function(begT,endT,indexID = "EI000985"){
+        
+        RebDate <- getRebDates(begT,endT)
+        TS <- getTS(RebDate, indexID)
+        TSF <- gf_lcfs(TS,'F000006')
+        TSF <- RFactorModel:::factor.na(TSF,method='median')
+        TSF <- ddply(TSF, ~ date, mutate, group = as.numeric(cut_number(factorscore,3)))
+        tmp.TS1 <- TSF[TSF$group==1,c("date","stockID")]
+        tmp.TS1 <- ddply(tmp.TS1, ~ date, mutate, recnum = seq(1,length(date)))
+        tmp.TS3 <- TSF[TSF$group==3,c("date","stockID")]
+        tmp.TS3 <- ddply(tmp.TS3, ~ date, mutate, recnum = seq(1,length(date)))
+        
+        tmp <- ddply(tmp.TS1,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS1 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS1 <- ddply(TS1, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS1 <- merge.x(TS1,tmp.TS1)
+        TS1 <- TS1[,c("datenew","stockID")]
+        colnames(TS1) <- c("date","stockID")
+        
+        tmp <- ddply(tmp.TS3,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS3 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS3 <- ddply(TS3, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS3 <- merge.x(TS3,tmp.TS3)
+        TS3 <- TS3[,c("datenew","stockID")]
+        colnames(TS3) <- c("date","stockID")
+        
+        TSR1 <- getTSR(TS1)
+        TSR3 <- getTSR(TS3)
+        R1 <- TSR1[!is.na(TSR1$date_end),c("date_end","periodrtn")]
+        R1 <- R1[!is.na(R1$periodrtn),]
+        R1 <- ddply(R1,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        R3 <- TSR3[!is.na(TSR3$date_end),c("date_end","periodrtn")]
+        R3 <- R3[!is.na(R3$periodrtn),]
+        R3 <- ddply(R3,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        
+        rtn <- merge(R1,R3,by='date_end')
+        colnames(rtn) <- c('date','H','L')
+        rtn$HML <- rtn$H-rtn$L
+        rtn <- rtn[,c('date','HML')]
+        return(rtn)
+      }
+      
+      SMB <- getSMB(begT,endT)
+      HML <- getHML(begT,endT)
+      
+      FF3 <- merge(SMB,HML,by='date')
+      qr <- paste("SELECT convert(varchar(8),q.[TradingDay],112) 'date',
+                  q.ClosePrice/q.PrevClosePrice-1 'market'
+                  FROM QT_IndexQuote q,SecuMain s
+                  where q.InnerCode=s.InnerCode AND s.SecuCode='801003'
+                  and q.TradingDay>=",QT(min(FF3$date))," and q.TradingDay<=",QT(max(FF3$date)),
+                  " order by q.TradingDay")
+      index <- sqlQuery(db.jy(),qr)
+      index$date <- intdate2r(index$date)
+      FF3 <- merge(FF3,index,by='date')
+      
+      
+      qr <- paste("SELECT convert(varchar(8),q.TradingDay,112) 'date',
+                  'EQ'+s.SecuCode 'stockID',[ClosePrice]/[PrevClosePrice]-1 'dailyrtn'
+                  FROM [JYDB].[dbo].[QT_DailyQuote] q, JYDB.dbo.SecuMain s
+                  where s.InnerCode=q.InnerCode and q.TradingDay>=",QT(min(FF3$date)),
+                  " and q.TradingDay<=",QT(max(FF3$date))," and s.SecuCategory=1 and s.SecuMarket in (83,90)
+                  order by s.SecuCode,q.TradingDay")
+      stockrtn <- sqlQuery(db.jy(),qr,stringsAsFactors=F)
+      stockrtn$date <- intdate2r(stockrtn$date)
+      
+      tmp.stock <- unique(stockrtn$stockID)
+      IVR <- data.frame()
+      pb <- txtProgressBar(style = 3)
+      nwin <- 22
+      for(i in 1:length(tmp.stock)){
+        tmp.rtn <- stockrtn[stockrtn$stockID==tmp.stock[i],]
+        tmp.FF3 <- merge(FF3,tmp.rtn[,c('date','dailyrtn')],by='date',all.x=T)
+        tmp.FF3 <- tmp.FF3[!is.na(tmp.FF3$dailyrtn),]
+        if(nrow(tmp.FF3)<nwin) next
+        tmp <- rollapply(tmp.FF3[,c("dailyrtn","market","SMB","HML")], width =nwin,
+                         function(x){
+                           x <- as.data.frame(x)
+                           if(sum(x$dailyrtn==0)>=5){
+                             result <- NaN
+                           }else{
+                             tmp.lm <- lm(dailyrtn~market+SMB+HML, data = x)
+                             result <- 1-summary(tmp.lm)$r.squared
+                           }
+                           return(result)},by.column = FALSE, align = "right")
+        IVR.tmp <- data.frame(date=tmp.FF3$date[nwin:nrow(tmp.FF3)],
+                              stockID=as.character(tmp.stock[i]),
+                              IVRValue=tmp)
+        IVR <- rbind(IVR,IVR.tmp)
+        setTxtProgressBar(pb, i/length(tmp.stock))
+      }
+      close(pb)
+      IVR <- IVR[!is.nan(IVR$IVRValue),]
+      IVR$date <- rdate2int(IVR$date)
+      colnames(IVR) <- c('TradingDay','ID','F000023')
+      IVR <- IVR[,c('ID','TradingDay','F000023')]
+      
+      result <- merge.x(result,IVR,by=c('ID','TradingDay'))
+      result <- result[,c("ID","TradingDay","F000021","F000022","F000023")]
+      result <- arrange(result,TradingDay,ID)
+    }
   }
+  
+  dbWriteTable(db.local(),"QT_FactorScore_amtao",result,overwrite=T,append=F)
   print(Sys.time()-time)
 }
+
+
+lcdb.update.QT_FactorScore_amtao <- function(factordf=data.frame(factorID=c('F000021','F000022','F000023'),
+                                                                 factorName=c('liquidity','beta','IVR'),
+                                                                 stringsAsFactors=FALSE)){
+  date <- dbGetQuery(db.local(),"select max(TradingDay) 'date' from QT_FactorScore_amtao")
+  date <- intdate2r(date$date)
+  
+  for(i in 1:nrow(factordf)){
+    if(factordf$factorName[i]=='liquidity'){
+      cat('updating ',factordf$factorName[i],' factor...\n')
+      new.date <- trday.nearby(date,21)
+      qr <- paste("select t.ID,t.TradingDay,t.TurnoverVolume,t.NonRestrictedShares 
+                  from QT_DailyQuote t
+                  where t.TradingDay>=",rdate2int(new.date))
+      re <- sqlQuery(db.quant(),qr)
+      re$TurnoverRate <- re$TurnoverVolume/(re$NonRestrictedShares*10000)
+      re <- re[,c("ID","TradingDay","TurnoverRate")]
+      re$TurnoverRate <-abs(re$TurnoverRate) 
+      re <- re[substr(re$ID, 1,3) %in% c('EQ0',"EQ6","EQ3"),]
+      re <- arrange(re,ID,TradingDay)
+      tmp <- as.data.frame(table(re$ID))
+      tmp <- tmp[tmp$Freq>=21,]
+      re <- re[re$ID%in%tmp$Var1,]
+      
+      liquidity <- ddply(re,"ID",mutate,STOM=rollsum(TurnoverRate,21,fill=NA,align = 'right'))
+      liquidity <- subset(liquidity,!is.na(liquidity$STOM))
+      liquidity <- liquidity[liquidity$TradingDay>rdate2int(date),]
+      liquidity$STOM <- log(liquidity$STOM)
+      liquidity[liquidity$TurnoverRate==0,"STOM"] <- NA
+      liquidity <- liquidity[,c("ID","TradingDay","STOM")]
+      colnames(liquidity)[3] <- factordf$factorID[i]
+      
+      result <- liquidity
+    }else if(factordf$factorName[i]=='beta'){
+      cat('updating ',factordf$factorName[i],' factor...\n')
+      new.date <- trday.nearby(date,250)
+      qr <- paste("select t.ID,t.TradingDay,t.DailyReturn
+                  from QT_DailyQuote t
+                  where t.TradingDay>=",rdate2int(new.date))
+      re <- sqlQuery(db.quant(),qr)
+      re <- arrange(re,ID,TradingDay)
+      qr <- paste("SELECT convert(varchar(8),q.[TradingDay],112) 'TradingDay',
+                  q.ClosePrice/q.PrevClosePrice-1 'indexRtn'
+                  FROM QT_IndexQuote q,SecuMain s
+                  where q.InnerCode=s.InnerCode AND s.SecuCode='801003'
+                  and q.TradingDay>=",QT(new.date),
+                  "order by q.TradingDay")
+      index <- sqlQuery(db.jy(),qr)
+      re <- merge.x(re,index)
+      re <- re[!is.na(re$indexRtn),]
+      tmp <- as.data.frame(table(re$ID))
+      tmp <- tmp[tmp$Freq>=250,]
+      re <- re[re$ID%in%tmp$Var1,]
+      re <- arrange(re,ID,TradingDay)
+      
+      stocks <- unique(re$ID)
+      pb <- txtProgressBar(style = 3)
+      for(j in 1:length(stocks)){
+        tmp <- re[re$ID==stocks[j],]
+        beta.tmp <- rollapply(tmp[,c('DailyReturn','indexRtn')], width = 250,
+                              function(x) coef(lm(DailyReturn ~ indexRtn, data = as.data.frame(x))),
+                              by.column = FALSE, align = "right")
+        beta.tmp <- as.data.frame(beta.tmp)
+        beta.tmp$ID <- stocks[j]
+        beta.tmp$TradingDay <- tmp$TradingDay[250:nrow(tmp)]
+        beta.tmp <- beta.tmp[,c("ID","TradingDay","indexRtn")]
+        colnames(beta.tmp)[3] <- factordf$factorID[i]
+        if(j==1){
+          beta <- beta.tmp
+        }else{
+          beta <- rbind(beta,beta.tmp)
+        }
+        setTxtProgressBar(pb, j/length(stocks))
+      }
+      close(pb)
+      beta <- beta[beta$TradingDay>rdate2int(date),]
+      result <- merge.x(result,beta,by=c('ID','TradingDay'))
+      result <- result[,c("ID","TradingDay","F000021","F000022")]
+    }else if(factordf$factorName[i]=='IVR'){
+      cat('updating ',factordf$factorName[i],' factor...\n')
+      begT <- trday.nearby(date,22)
+      endT <- Sys.Date()-1
+      dates <- getRebDates(begT,endT)
+      
+      
+      getSMB <- function(begT,endT,indexID = "EI000985"){
+        RebDate <- getRebDates(begT,endT)
+        TS <- getTS(RebDate, indexID)
+        TSF <- gf_lcfs(TS,'F000002')
+        TSF <- RFactorModel:::factor.na(TSF,method='median')
+        TSF <- ddply(TSF, ~ date, mutate, group = as.numeric(cut_number(factorscore,3)))
+        tmp.TS1 <- TSF[TSF$group==1,c("date","stockID")]
+        tmp.TS1 <- ddply(tmp.TS1, ~ date, mutate, recnum = seq(1,length(date)))
+        tmp.TS3 <- TSF[TSF$group==3,c("date","stockID")]
+        tmp.TS3 <- ddply(tmp.TS3, ~ date, mutate, recnum = seq(1,length(date)))
+        
+        tmp <- ddply(tmp.TS1,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS1 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS1 <- ddply(TS1, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS1 <- merge.x(TS1,tmp.TS1)
+        TS1 <- TS1[,c("datenew","stockID")]
+        colnames(TS1) <- c("date","stockID")
+        
+        tmp <- ddply(tmp.TS3,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS3 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS3 <- ddply(TS3, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS3 <- merge.x(TS3,tmp.TS3)
+        TS3 <- TS3[,c("datenew","stockID")]
+        colnames(TS3) <- c("date","stockID")
+        
+        TSR1 <- getTSR(TS1)
+        TSR3 <- getTSR(TS3)
+        R1 <- TSR1[!is.na(TSR1$date_end),c("date_end","periodrtn")]
+        R1 <- R1[!is.na(R1$periodrtn),]
+        R1 <- ddply(R1,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        R3 <- TSR3[!is.na(TSR3$date_end),c("date_end","periodrtn")]
+        R3 <- R3[!is.na(R3$periodrtn),]
+        R3 <- ddply(R3,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        
+        rtn <- merge(R1,R3,by='date_end')
+        colnames(rtn) <- c('date','S','B')
+        rtn$SMB <- rtn$S-rtn$B
+        rtn <- rtn[,c('date','SMB')]
+        return(rtn)
+      }
+      
+      getHML <- function(begT,endT,indexID = "EI000985"){
+        
+        RebDate <- getRebDates(begT,endT)
+        TS <- getTS(RebDate, indexID)
+        TSF <- gf_lcfs(TS,'F000006')
+        TSF <- RFactorModel:::factor.na(TSF,method='median')
+        TSF <- ddply(TSF, ~ date, mutate, group = as.numeric(cut_number(factorscore,3)))
+        tmp.TS1 <- TSF[TSF$group==1,c("date","stockID")]
+        tmp.TS1 <- ddply(tmp.TS1, ~ date, mutate, recnum = seq(1,length(date)))
+        tmp.TS3 <- TSF[TSF$group==3,c("date","stockID")]
+        tmp.TS3 <- ddply(tmp.TS3, ~ date, mutate, recnum = seq(1,length(date)))
+        
+        tmp <- ddply(tmp.TS1,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS1 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS1 <- ddply(TS1, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS1 <- merge.x(TS1,tmp.TS1)
+        TS1 <- TS1[,c("datenew","stockID")]
+        colnames(TS1) <- c("date","stockID")
+        
+        tmp <- ddply(tmp.TS3,~date,summarise,nstock=length(date))
+        tmp.date <- data.frame(date=getRebDates(begT,Sys.Date()-1,rebFreq = 'day'))
+        tmp.date$nstock <- tmp$nstock[findInterval(tmp.date$date,tmp$date)]
+        tmp.date$datecor <- tmp$date[findInterval(tmp.date$date,tmp$date)]
+        TS3 <- data.frame(datenew=rep(tmp.date$date,tmp.date$nstock),
+                          date=rep(tmp.date$datecor,tmp.date$nstock))
+        TS3 <- ddply(TS3, ~ datenew, mutate, recnum = seq(1,length(datenew)))
+        TS3 <- merge.x(TS3,tmp.TS3)
+        TS3 <- TS3[,c("datenew","stockID")]
+        colnames(TS3) <- c("date","stockID")
+        
+        TSR1 <- getTSR(TS1)
+        TSR3 <- getTSR(TS3)
+        R1 <- TSR1[!is.na(TSR1$date_end),c("date_end","periodrtn")]
+        R1 <- R1[!is.na(R1$periodrtn),]
+        R1 <- ddply(R1,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        R3 <- TSR3[!is.na(TSR3$date_end),c("date_end","periodrtn")]
+        R3 <- R3[!is.na(R3$periodrtn),]
+        R3 <- ddply(R3,~date_end,summarise,dailtRtn=mean(periodrtn,na.rm = T))
+        
+        rtn <- merge(R1,R3,by='date_end')
+        colnames(rtn) <- c('date','H','L')
+        rtn$HML <- rtn$H-rtn$L
+        rtn <- rtn[,c('date','HML')]
+        return(rtn)
+      }
+      
+      SMB <- getSMB(begT,endT)
+      HML <- getHML(begT,endT)
+      
+      FF3 <- merge(SMB,HML,by='date')
+      qr <- paste("SELECT convert(varchar(8),q.[TradingDay],112) 'date',
+                  q.ClosePrice/q.PrevClosePrice-1 'market'
+                  FROM QT_IndexQuote q,SecuMain s
+                  where q.InnerCode=s.InnerCode AND s.SecuCode='801003'
+                  and q.TradingDay>=",QT(min(FF3$date))," and q.TradingDay<=",QT(max(FF3$date)),
+                  " order by q.TradingDay")
+      index <- sqlQuery(db.jy(),qr)
+      index$date <- intdate2r(index$date)
+      FF3 <- merge(FF3,index,by='date')
+      
+      
+      qr <- paste("SELECT convert(varchar(8),q.TradingDay,112) 'date',
+                  'EQ'+s.SecuCode 'stockID',[ClosePrice]/[PrevClosePrice]-1 'dailyrtn'
+                  FROM [JYDB].[dbo].[QT_DailyQuote] q, JYDB.dbo.SecuMain s
+                  where s.InnerCode=q.InnerCode and q.TradingDay>=",QT(min(FF3$date)),
+                  " and q.TradingDay<=",QT(max(FF3$date))," and s.SecuCategory=1 and s.SecuMarket in (83,90)
+                  order by s.SecuCode,q.TradingDay")
+      stockrtn <- sqlQuery(db.jy(),qr,stringsAsFactors=F)
+      stockrtn$date <- intdate2r(stockrtn$date)
+      
+      tmp.stock <- unique(stockrtn$stockID)
+      IVR <- data.frame()
+      pb <- txtProgressBar(style = 3)
+      nwin <- 22
+      for(i in 1:length(tmp.stock)){
+        tmp.rtn <- stockrtn[stockrtn$stockID==tmp.stock[i],]
+        tmp.FF3 <- merge(FF3,tmp.rtn[,c('date','dailyrtn')],by='date',all.x=T)
+        tmp.FF3 <- tmp.FF3[!is.na(tmp.FF3$dailyrtn),]
+        if(nrow(tmp.FF3)<nwin) next
+        tmp <- rollapply(tmp.FF3[,c("dailyrtn","market","SMB","HML")], width =nwin,
+                         function(x){
+                           x <- as.data.frame(x)
+                           if(sum(x$dailyrtn==0)>=5){
+                             result <- NaN
+                           }else{
+                             tmp.lm <- lm(dailyrtn~market+SMB+HML, data = x)
+                             result <- 1-summary(tmp.lm)$r.squared
+                           }
+                           return(result)},by.column = FALSE, align = "right")
+        IVR.tmp <- data.frame(date=tmp.FF3$date[nwin:nrow(tmp.FF3)],
+                              stockID=as.character(tmp.stock[i]),
+                              IVRValue=tmp)
+        IVR <- rbind(IVR,IVR.tmp)
+        setTxtProgressBar(pb, i/length(tmp.stock))
+      }
+      close(pb)
+      IVR <- IVR[IVR$date>date,]
+      IVR <- IVR[!is.nan(IVR$IVRValue),]
+      IVR$date <- rdate2int(IVR$date)
+      colnames(IVR) <- c('TradingDay','ID','F000023')
+      IVR <- IVR[,c('ID','TradingDay','F000023')]
+      
+      result <- merge.x(result,IVR,by=c('ID','TradingDay'))
+      result <- result[,c("ID","TradingDay","F000021","F000022","F000023")]
+      result <- arrange(result,TradingDay,ID)
+    }
+  }
+  
+  dbWriteTable(db.local(),"QT_FactorScore_amtao",result,overwrite=F,append=T)
+  return('Done!')
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 #'fix.lcdb.swindustry
@@ -322,15 +812,41 @@ gf.liquidity <- function(TS){
   TS$date <- rdate2int(TS$date)
   con <- db.local()
   dbWriteTable(con,name="yrf_tmp",value=TS[,c("date","stockID")],row.names = FALSE,overwrite = TRUE)
-  qr <-"select a.*,b.FactorScore 'factorscore'
-  from yrf_tmp a left join QT_FactorScore_Liquidity b
-  on a.date=b.TradingDay and a.stockID=b.ID and b.FactorName='STOM'"
+  qr <-"select a.*,b.F000021 'factorscore'
+  from yrf_tmp a left join QT_FactorScore_amtao b
+  on a.date=b.TradingDay and a.stockID=b.ID"
   re <- dbGetQuery(con,qr)
   dbDisconnect(con)  
-  re <- merge.x(TS,re,by=c("date","stockID"))  
-  re <- transform(re, date=intdate2r(date))   
+  re <- transform(re, date=intdate2r(date))
+  re <- arrange(re,date,stockID)
   return(re)
 }
+
+
+#' gf.beta
+#'
+#' get beta factor in local db
+#' @author Andrew Dow
+#' @param TS is a TS object.
+#' @return a TSF object
+#' @examples 
+#' gf.beta(TS)
+gf.beta <- function(TS){
+  check.TS(TS)  
+  TS$date <- rdate2int(TS$date)
+  con <- db.local()
+  dbWriteTable(con,name="yrf_tmp",value=TS[,c("date","stockID")],row.names = FALSE,overwrite = TRUE)
+  qr <-"select a.*,b.F000022 'factorscore'
+  from yrf_tmp a left join QT_FactorScore_amtao b
+  on a.date=b.TradingDay and a.stockID=b.ID"
+  re <- dbGetQuery(con,qr)
+  dbDisconnect(con)  
+  re <- transform(re, date=intdate2r(date))
+  re <- arrange(re,date,stockID)
+  return(re)
+}
+
+
 
 
 #' gf.ln_mkt_cap

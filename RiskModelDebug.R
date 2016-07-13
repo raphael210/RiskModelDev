@@ -1,12 +1,16 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
-RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-03-31'),'month')
-TS <- getTS(RebDates,'EI000905')
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-05-31'),'month')
+TS <- getTS(RebDates,'EI801003')
 
 riskfactorLists <- buildFactorLists(
   buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
-  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"))
+  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm")
+  )
+factorIDs <- c("F000006")
+riskfactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
+riskfactorLists <- c(riskfactorLists,riskfactorLists2)
 
-alphafactorLists1 <- buildFactorLists(
+alphafactorLists <- buildFactorLists(
   buildFactorList("gf.NP_YOY",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.G_scissor_Q",factorStd="norm",factorNA = "median"),
   buildFactorList("gf.GG_NP_Q",factorStd="norm",factorNA = "median"),
@@ -16,7 +20,7 @@ alphafactorLists1 <- buildFactorLists(
 )
 factorIDs <- c("F000003","F000004","F000008","F000009","F000010")
 alphafactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
-alphafactorLists <- c(alphafactorLists1,alphafactorLists2)
+alphafactorLists <- c(alphafactorLists,alphafactorLists2)
 
 TSF <- getTSFQuick(TS,alphafactorLists,riskfactorLists)
 
@@ -53,5 +57,10 @@ ggplot.WealthIndex(re)
 rtn.summary(re)
 
 
-
-
+# update local data base
+tsInclude()
+tsConnect()
+lcdb.update()
+add.index.lcdb(indexID="EI801003")
+add.index.lcdb(indexID="EI000985")
+lcdb.update.QT_FactorScore_amtao()
