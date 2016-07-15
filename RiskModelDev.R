@@ -429,11 +429,17 @@ lcdb.build.QT_FactorScore_amtao <- function(factordf=data.frame(factorID=c('F000
   print(Sys.time()-time)
 }
 
-
-lcdb.update.QT_FactorScore_amtao <- function(factordf=data.frame(factorID=c('F000021','F000022','F000023'),
-                                                                 factorName=c('liquidity','beta','IVR'),
-                                                                 stringsAsFactors=FALSE)){
-  date <- dbGetQuery(db.local(),"select max(TradingDay) 'date' from QT_FactorScore_amtao")
+#' lcdb.update.QT_FactorScore_amtao
+#' 
+#' update the QT_FactorScore_amtao table in local database
+#' @author Andrew Dow
+#' @examples 
+#' lcdb.update.QT_FactorScore_amtao()
+lcdb.update.QT_FactorScore_amtao <- function(){
+  con <- db.local()
+  factordf <- dbGetQuery(con,"select factorID,factorName from CT_FactorLists_amtao")
+  date <- dbGetQuery(con,"select max(TradingDay) 'date' from QT_FactorScore_amtao")
+  dbDisconnect(con)
   date <- intdate2r(date$date)
   
   for(i in 1:nrow(factordf)){
@@ -703,51 +709,52 @@ fix.lcdb.swindustry <- function(){
   re <- dbGetQuery(db.local(),qr)
   if(nrow(re)>0) return("Already in local database!")
   
-  qr <- "SELECT s.SecuCode 'stockID',l.CompanyCode,l.FirstIndustryCode 'Code1',l.FirstIndustryName 'Name1',
+  #get raw data
+  qr <- "SELECT 'EQ'+s.SecuCode 'stockID',l.CompanyCode,l.FirstIndustryCode 'Code1',l.FirstIndustryName 'Name1',
   l.SecondIndustryCode 'Code2',l.SecondIndustryName 'Name2',l.ThirdIndustryCode 'Code3',
   l.ThirdIndustryName 'Name3',convert(varchar, l.InfoPublDate, 112) 'InDate',
   convert(varchar, l.CancelDate, 112) 'OutDate',l.InfoSource,l.Standard,l.Industry,
   l.IfPerformed 'Flag',l.XGRQ 'UpdateTime'
   FROM [JYDB].[dbo].[LC_ExgIndustry] l,JYDB.dbo.SecuMain s
-  where l.CompanyCode=s.CompanyCode and s.SecuCategory=1 and l.Standard in(9,24)"
+  where l.CompanyCode=s.CompanyCode and s.SecuCategory=1 
+  and s.SecuMarket in(83,90) and l.Standard in(9,24)"
   re <- sqlQuery(db.jy(),qr,stringsAsFactors=F)
-  re <- re[str_sub(re$stockID,1,2) %in% c('60','30','00'),]
-  re <- re[ifelse(is.na(re$OutDate),T,re$OutDate!=re$InDate),]
-  re$stockID <- str_c("EQ",re$stockID)
+  re <- re[str_sub(re$stockID,1,3) %in% c('EQ6','EQ3','EQ0'),]
+  re <- re[ifelse(is.na(re$OutDate),T,re$OutDate!=re$InDate),] # remove indate==outdate wrong data
   
   sw24use <- re[(re$InDate>20140101) & (re$Standard==24),]
   sw9use <- re[(re$InDate<20140101) & (re$Standard==9),]
   sw24tmp <- re[(re$InDate==20140101) & (re$Standard==24),]
-  sw9tmp <- sw9use[is.na(sw9use$OutDate) | sw9use$OutDate>20140101,]
-  sw9tmp <- sw9tmp[,c("stockID","Code1","Name1","Code2","Name2","Code3","Name3")]
+  sw9tmp <- sw9use[is.na(sw9use$OutDate) | sw9use$OutDate>20140101,c("stockID","Code1","Name1","Code2","Name2","Code3","Name3")]
   colnames(sw9tmp) <- c("stockID","OldCode1","OldName1","OldCode2","OldName2","OldCode3","OldName3")
   hashtable <- merge(sw24tmp,sw9tmp,by='stockID',all.x=T)
   hashtable <- hashtable[,c("Code1","Name1","Code2","Name2","Code3","Name3","OldCode1","OldName1","OldCode2","OldName2","OldCode3","OldName3")]
   hashtable <- unique(hashtable)
-  tmp <- as.data.frame(table(hashtable$OldName3))
-  tmp <- tmp[tmp$Freq==1,]
-  hashtable <- hashtable[hashtable$OldName3 %in% tmp$Var1,]
+  hashtable <- ddply(hashtable,~OldName3,mutate,n=length(OldName3))
+  hashtable <- hashtable[hashtable$n==1,c("Code1","Name1","Code2","Name2","Code3","Name3","OldCode1","OldName1","OldCode2","OldName2","OldCode3","OldName3")]
   
   sw9use <- rename(sw9use,replace=c("Code1"="OldCode1",
-                          "Name1"="OldName1",
-                          "Code2"="OldCode2",
-                          "Name2"="OldName2",
-                          "Code3"="OldCode3",
-                          "Name3"="OldName3"))
+                                    "Name1"="OldName1",
+                                    "Code2"="OldCode2",
+                                    "Name2"="OldName2",
+                                    "Code3"="OldCode3",
+                                    "Name3"="OldName3"))
   sw9use <- merge(sw9use,hashtable,by=c("OldCode1","OldName1", 
                                         "OldCode2","OldName2",
                                         "OldCode3","OldName3"),all.x=T)
   sw9use <- sw9use[,c("stockID","CompanyCode","Code1","Name1","Code2","Name2",      
-                       "Code3","Name3","InDate","OutDate","InfoSource","Standard", 
-                       "Industry","Flag","UpdateTime","OldCode1","OldName1","OldCode2",
+                      "Code3","Name3","InDate","OutDate","InfoSource","Standard", 
+                      "Industry","Flag","UpdateTime","OldCode1","OldName1","OldCode2",
                       "OldName2","OldCode3","OldName3")]
   tmp <- sw9use[is.na(sw9use$Code1),c("stockID","CompanyCode","InDate","OutDate","InfoSource","Standard", 
                                       "Industry","Flag","UpdateTime","OldCode1","OldName1","OldCode2",
                                       "OldName2","OldCode3","OldName3")]
+  sw9use <- sw9use[!is.na(sw9use$Code1),c("stockID","CompanyCode","Code1","Name1","Code2","Name2",      
+                                          "Code3","Name3","InDate","OutDate","InfoSource","Standard", 
+                                          "Industry","Flag","UpdateTime")]
   
   tmp <- arrange(tmp,stockID,InDate)
-  tmp2 <- sw24tmp[,c("stockID","Code1","Name1","Code2","Name2","Code3","Name3")]
-  tmp <-merge(tmp,tmp2,by='stockID',all.x=T) 
+  tmp <-merge(tmp,sw24tmp[,c("stockID","Code1","Name1","Code2","Name2","Code3","Name3")],by='stockID',all.x=T) 
   tmp[is.na(tmp$Code1),c("Name1","Name2","Name3")] <- '综合'
   tmp[is.na(tmp$Code1),"Code1"] <-510000
   tmp[is.na(tmp$Code2),"Code3"] <-510100
@@ -755,12 +762,8 @@ fix.lcdb.swindustry <- function(){
   tmp <- tmp[,c("stockID","CompanyCode","Code1","Name1","Code2","Name2",      
                 "Code3","Name3","InDate","OutDate","InfoSource","Standard", 
                 "Industry","Flag","UpdateTime")]
-  
-  sw9use <- sw9use[!is.na(sw9use$Code1),c("stockID","CompanyCode","Code1","Name1","Code2","Name2",      
-                                                      "Code3","Name3","InDate","OutDate","InfoSource","Standard", 
-                                                      "Industry","Flag","UpdateTime")]
   sw9use <- rbind(sw9use,tmp)
-
+  
   sw33 <- rbind(sw9use,sw24use)
   sw33$Standard <- 33
   sw33$Code1 <- str_c('ES33',sw33$Code1)
@@ -773,8 +776,8 @@ fix.lcdb.swindustry <- function(){
   sw33 <- arrange(sw33,stockID,InDate)
   
   #deal with abnormal condition
-  #1 outdate<indate
-  sw33 <- sw33[ifelse(is.na(sw33$OutDate),T,sw33$OutDate>=sw33$InDate),]
+  #1 outdate<=indate
+  sw33 <- sw33[ifelse(is.na(sw33$OutDate),T,sw33$OutDate>sw33$InDate),]
   #2 one stock has two null outdate
   tmp <- ddply(sw33,.(stockID),summarise,NANum=sum(is.na(OutDate)))
   tmp <- c(tmp[tmp$NANum>1,'stockID'])
@@ -793,6 +796,8 @@ fix.lcdb.swindustry <- function(){
   sw33$InDate <- ifelse(ifelse(is.na(sw33$tmpstockID) | is.na(sw33$tmpOutDate),FALSE,sw33$stockID==sw33$tmpstockID & sw33$InDate!=sw33$tmpOutDate),
                         sw33$tmpOutDate,sw33$InDate)
   sw33 <- subset(sw33,select=-c(tmpstockID,tmpOutDate))
+  # 4 duplicate indate
+  sw33 <- sw33[ifelse(is.na(sw33$OutDate),T,sw33$OutDate>sw33$InDate),]
   
   dbWriteTable(db.local(),'LC_ExgIndustry',sw33,overwrite=FALSE,append=TRUE,row.names=FALSE)
   return('Done!')
@@ -847,6 +852,28 @@ gf.beta <- function(TS){
 }
 
 
+#' gf.IVR
+#'
+#' get IVR factor in local db
+#' @author Andrew Dow
+#' @param TS is a TS object.
+#' @return a TSF object
+#' @examples 
+#' gf.IVR(TS)
+gf.IVR <- function(TS){
+  check.TS(TS)  
+  TS$date <- rdate2int(TS$date)
+  con <- db.local()
+  dbWriteTable(con,name="yrf_tmp",value=TS[,c("date","stockID")],row.names = FALSE,overwrite = TRUE)
+  qr <-"select a.*,b.F000023 'factorscore'
+  from yrf_tmp a left join QT_FactorScore_amtao b
+  on a.date=b.TradingDay and a.stockID=b.ID"
+  re <- dbGetQuery(con,qr)
+  dbDisconnect(con)  
+  re <- transform(re, date=intdate2r(date))
+  re <- arrange(re,date,stockID)
+  return(re)
+}
 
 
 #' gf.ln_mkt_cap
@@ -858,7 +885,7 @@ gf.beta <- function(TS){
 #' @examples 
 #' gf.ln_mkt_cap(TS)
 gf.ln_mkt_cap <- function(TS){
-  TSF <- gf.mkt_cap(TS)
+  TSF <- gf_lcfs(TS, 'F000002')
   TSF$factorscore <- ifelse(is.na(TSF$factorscore),NA,log(TSF$factorscore))
   return(TSF)
 }
