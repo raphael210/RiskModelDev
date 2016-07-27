@@ -1,0 +1,519 @@
+---
+title: "特异度因子测试"
+date: "`r format(Sys.time(), '%Y/%m/%d')`"
+output: 
+  html_document:
+    toc: true # table of content true
+    depth: 3  # upto three depths of headings (specified by #, ## and ###)
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(quantTools)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+
+## 一、因子综述
+   
+### (一)因子简介 
+   
+特异度因子来源于fama-french三因子模型，具体可以参考东金工券的投机、交易行为与股票收益(上)。特异度因子的构建方法，每天利用过去22个交易日的数据进行如下回归：
+$$r_{i,t} =\alpha_{i,t}+\beta1_{,i}*MKT_{t}+\beta2_{i}*SMB_{t}+\beta3_{i}*HML_{t}+\epsilon_{i,t} $$
+其中$MKT_{t}$,$SMB_{t}$,$HML_{t}$分别为市场收益率，市值因子收益率，估值因子收益率，这里的市场收益率取的是申万A指(801003)的收益率序列。三因子对股票收益的解释度越高，上述方程的$R^{2}$越高。
+特异度因子IVR如下公式所示：
+$$IVR=1-R^{2}$$
+特异度反映了股票收益中不能被市场、规模、估值解释的部分。特异度越高的股票被过度投机的可能性越大，后续补跌的概率更大。
+
+
+### (二)因子效果展示
+    
+因子IC序列如下图所示：
+    
+```{r factorIC,warning=FALSE}
+begT <- as.Date('2006-01-31')
+endT <- as.Date('2016-06-30')
+RebDates <- getRebDates(begT,endT)
+#TS <- getTS(RebDates,'EI000985')
+#TSF <- getTSF(TS,factorFun = 'gf_lcfs',factorPar = list(factorID='F000017'),factorDir = -1,
+#              factorStd = 'norm')
+load("~/R/FactorModelDev/TSFR.RData")
+chart.IC(TSFR)
+```
+    
+    
+因子分组的年化收益率如下图所示：
+    
+```{r factorgroup,warning=FALSE}
+chart.Ngroup.overall(TSFR,N = 10)
+```
+   
+    
+因子多空收益如下图所示：
+     
+```{r factorls,warning=FALSE}
+chart.Ngroup.spread(TSFR,N = 10)
+```
+
+
+
+### (三)纯因子组合
+    
+上述因子IC、因子分组、因子多空组合不能剥离行业、市值等风格特征。下面构建的纯因子组合是剔除了市值、行业、估值等风险特征的纯因子组合，更能有效的反映因子的alpha性。   
+     
+
+```{r purefactordata,include=FALSE}
+riskfactorLists <- buildFactorLists(buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,
+                                                    factorStd = "norm"))
+factorIDs <- c("F000006","F000015","F000016")
+tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm")
+riskfactorLists <- c(riskfactorLists,tmp)
+factorRtn <- pure.factor.test(TSFR,riskfactorLists)
+```
+
+     
+     
+    
+纯因子组合收益率如下图所示：
+   
+   
+```{r purefactorPlot,warning=FALSE}
+ggplots.PerformanceSummary(factorRtn,main= '纯因子组合收益')
+```  
+    
+    
+纯因子组合收益率统计如下表：
+    
+```{r purefactortable,results='asis'}
+rtnsum <- rbind(rtn.summary(factorRtn),rtn.periods(factorRtn))
+rtnsum <- round(rtnsum,digits = 3)
+rtnsum <- data.frame(factorRtn=rtnsum[c(nrow(rtnsum)-1,(1:(nrow(rtnsum)-2))),])
+colnames(rtnsum) <- '纯因子组合收益率统计'
+rownames(rtnsum)[1:6] <- c('累计收益率','年化收益率','年化波动率','年化夏普','胜率','最大回撤')
+kable(rtnsum)
+```
+
+       
+       
+**************************************************************************
+    
+    
+**************************************************************************
+
+## 二、核心指数回测
+   
+上面的测试都是全市场测试，下面将在沪深300和中证500里面分别测试因子的效果。
+    
+### (一)沪深300
+   
+```{r factor300,warning=FALSE}
+TS <- getTS(RebDates,'EI000300')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indexStat <- table.factor.summary(TSFRtmp)
+colnames(indexStat) <- 'EI000300'
+```
+  
+### (二)中证500
+    
+```{r factor500,warning=FALSE}
+if(begT<as.Date('2007-01-31')){
+  tmp.RebDates <- getRebDates(as.Date('2007-01-31'),endT)
+  TS <- getTS(tmp.RebDates,'EI000905')
+}else{
+  TS <- getTS(RebDates,'EI000905')
+}
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indexStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indexStat.tmp) <- 'EI000905'
+indexStat <- cbind(indexStat,indexStat.tmp)
+```
+
+    
+### (三)指数统计
+两个指数中因子的IC统计和因子的多空组合收益率如下表所示     
+     
+```{r indexst,results='asis'}
+indexStat <- as.data.frame(t(indexStat))
+indexStat <- indexStat[,c("IC.mean","IC.std","IC.IR","IC.hitRatio","Annualized Return","Annualized Std Dev","Annualized Sharpe (Rf=0%)","HitRatio","Worst Drawdown")]
+colnames(indexStat) <- c('IC均值','IC标准差','ICIR','IC胜率','年化收益','年华波动率','年华夏普','胜率','最大回撤')
+kable(indexStat)
+```
+
+
+     
+**************************************************************************
+    
+    
+**************************************************************************
+   
+## 三、申万一级行业回测
+    
+### (一)农林牧渔
+     
+```{r indNLMY,warning=FALSE}
+TS <- getTS(RebDates,'ES33110000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat <- table.factor.summary(TSFRtmp)
+colnames(indStat) <- 'ES33110000'
+```
+
+    
+### (二)采掘
+    
+```{r indCJ,warning=FALSE}
+TS <- getTS(RebDates,'ES33210000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33210000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+
+    
+### (三)化工
+    
+```{r indHG,warning=FALSE}
+TS <- getTS(RebDates,'ES33220000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33220000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+
+       
+### (四)钢铁
+    
+```{r indGT,warning=FALSE}
+TS <- getTS(RebDates,'ES33230000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33230000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+
+       
+### (五)有色金属
+    
+```{r indYSJS,warning=FALSE}
+TS <- getTS(RebDates,'ES33240000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33240000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+
+    
+### (六)电子
+    
+```{r indDZ,warning=FALSE}
+TS <- getTS(RebDates,'ES33270000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33270000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+     
+     
+### (七)汽车
+    
+```{r indQC,warning=FALSE}
+TS <- getTS(RebDates,'ES33280000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33280000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (八)家用电器
+    
+```{r indJYDQ,warning=FALSE}
+TS <- getTS(RebDates,'ES33330000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33330000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (九)食品饮料
+    
+```{r indSPYL,warning=FALSE}
+TS <- getTS(RebDates,'ES33340000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33340000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (十)纺织服装
+    
+```{r indFZFZ,warning=FALSE}
+TS <- getTS(RebDates,'ES33350000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33350000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+     
+     
+### (十一)轻工制造
+    
+```{r indQGZZ,warning=FALSE}
+TS <- getTS(RebDates,'ES33360000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33360000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (十二)医药生物
+    
+```{r indYYSW,warning=FALSE}
+TS <- getTS(RebDates,'ES33370000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33370000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (十三)公用事业
+    
+```{r indGYSY,warning=FALSE}
+TS <- getTS(RebDates,'ES33410000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33410000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+                                    
+### (十四)交通运输
+    
+```{r indJTYS,warning=FALSE}
+TS <- getTS(RebDates,'ES33420000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33420000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (十五)房地产
+    
+```{r indFDC,warning=FALSE}
+TS <- getTS(RebDates,'ES33430000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33430000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (十六)商业贸易
+    
+```{r indSYMY,warning=FALSE}
+TS <- getTS(RebDates,'ES33450000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33450000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+     
+### (十七)休闲服务
+     
+```{r indXXFY,warning=FALSE}
+TS <- getTS(RebDates,'ES33460000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33460000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (十八)银行
+      
+```{r indYH,warning=FALSE}
+TS <- getTS(RebDates,'ES33480000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33480000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (十九)非银金融
+    
+```{r indFYJR,warning=FALSE}
+TS <- getTS(RebDates,'ES33490000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33490000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+   
+### (二十)综合
+    
+```{r indZH,warning=FALSE}
+TS <- getTS(RebDates,'ES33510000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33510000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+   
+   
+### (二十一)建筑材料
+     
+```{r indJZCL,warning=FALSE}
+TS <- getTS(RebDates,'ES33610000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33610000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (二十二)建筑装饰
+    
+```{r indJZZS,warning=FALSE}
+TS <- getTS(RebDates,'ES33620000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33620000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (二十三)电气设备
+    
+```{r indDQSB,warning=FALSE}
+TS <- getTS(RebDates,'ES33630000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33630000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+     
+     
+### (二十四)机械设备
+     
+```{r indJXSB,warning=FALSE}
+TS <- getTS(RebDates,'ES33640000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33640000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+     
+     
+### (二十五)国防军工
+    
+```{r indGFJG,warning=FALSE}
+TS <- getTS(RebDates,'ES33650000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33650000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (二十六)计算机
+    
+```{r indJSJ,warning=FALSE}
+TS <- getTS(RebDates,'ES33710000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33710000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (二十七)传媒
+    
+```{r indCM,warning=FALSE}
+TS <- getTS(RebDates,'ES33720000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33720000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (二十八)通信
+    
+```{r indTX,warning=FALSE}
+TS <- getTS(RebDates,'ES33730000')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'ES33730000'
+indStat <- cbind(indStat,indStat.tmp)
+```
+     
+    
+### (二十九)行业统计
+28个申万一级行业中因子的IC统计和因子的多空组合收益率如下表所示     
+     
+```{r indst,results='asis'}
+indStat <- as.data.frame(t(indStat))
+indStat$indName <- rownames(indStat)
+indStat <- plyr::arrange(indStat,plyr::desc(indStat[,7]))
+con <- db.local()
+qr <- 'select IndustryID,IndustryName from CT_IndustryList where
+        Standard=33 and Level=1'
+indName <- dbGetQuery(con,qr)
+dbDisconnect(con)
+tmp <- data.frame(IndustryID=indStat$indName)
+tmp$rank <- seq(1,nrow(tmp))
+tmp <- merge.x(tmp,indName)
+tmp <- plyr::arrange(tmp,rank)
+rownames(indStat) <- tmp$IndustryName
+indStat <- indStat[,c("IC.mean","IC.std","IC.IR","IC.hitRatio","Annualized Return","Annualized Std Dev","Annualized Sharpe (Rf=0%)","HitRatio","Worst Drawdown")]
+colnames(indStat) <- c('IC均值','IC标准差','ICIR','IC胜率','年化收益','年华波动率','年华夏普','胜率','最大回撤')
+kable(indStat)
+```
+
+     
+**************************************************************************
+    
+    
+**************************************************************************
+
+
+
+
+
+

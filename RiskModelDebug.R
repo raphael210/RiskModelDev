@@ -1,28 +1,58 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
-RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-06-30'),'month')
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-06-30'),rebFreq = 'week')
 TS <- getTS(RebDates,'EI000985')
 
-riskfactorLists <- buildFactorLists(
-  buildFactorList(factorFun = "gf.liquidity",factorDir = -1,factorNA = "median",factorStd = "norm"),
-  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"),
-  buildFactorList(factorFun = "gf.beta",factorDir = -1,factorNA = "median",factorStd = "norm")
-  )
-factorIDs <- c("F000006")
-riskfactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
-riskfactorLists <- c(riskfactorLists,riskfactorLists2)
-
+#alpha factor setting 
 alphafactorLists <- buildFactorLists(
-  buildFactorList("gf.NP_YOY",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_scissor_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.GG_OR_Q",factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_SCF_Q", factorStd="norm",factorNA = "median"),
-  buildFactorList("gf.G_MLL_Q",factorStd="norm",factorNA = "median")
+  buildFactorList("gf.NP_YOY",factorStd="norm")
 )
-factorIDs <- c("F000003","F000004","F000008","F000009","F000010")
-alphafactorLists2 <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
-alphafactorLists <- c(alphafactorLists,alphafactorLists2)
+factorIDs <- c("F000003","F000008","F000009","F000012","F000013","F000014","F000017")
+tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm")
+alphafactorLists <- c(alphafactorLists,tmp)
 
-TSF <- getTSFQuick(TS,alphafactorLists,riskfactorLists)
+#risk factor setting 
+riskfactorLists <- buildFactorLists(
+  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm")
+)
+factorIDs <- c("F000006","F000015","F000016")
+tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
+riskfactorLists <- c(riskfactorLists,tmp)
+
+
+factorLists <- c(alphafactorLists,riskfactorLists)
+for(i in 1:length(factorLists)){
+  factorFun <- factorLists[[i]]$factorFun
+  factorPar <- factorLists[[i]]$factorPar
+  factorName <- factorLists[[i]]$factorName
+  factorDir <- factorLists[[i]]$factorDir
+  factorOutlier <- factorLists[[i]]$factorOutlier
+  factorNA <- factorLists[[i]]$factorNA    
+  factorStd <- factorLists[[i]]$factorStd 
+  sectorAttr  <- factorLists[[i]]$sectorAttr
+  cat(paste("Function getMultiFactor: getting the score of factor",factorName,"....\n"))
+  # ---- get the raw factorscore
+  TSF <- getRawFactor(TS,factorFun,factorPar) 
+  # ---- adjust the direction (of the "single-factor-score")
+  TSF$factorscore <- TSF$factorscore*factorDir
+  # ---- deal with the outliers (of the "single-factor-score")
+  TSF <- factor.outlier(TSF,factorOutlier)
+  # ---- standardize the factorscore (of the "single-factor-score")
+  if(factorStd =="none"){
+    warning(paste("'factorStd' of factor",factorName, "is 'none'. It might make mistake when compute the multi-factorscore!"))
+  }
+  TSF <- factor.std(TSF,factorStd,sectorAttr)  
+  # ---- deal with the missing values (of the "single-factor-score")
+  if(factorNA=="na") factorNA <- "median"   # -- there should not be a missing value in the multi-factor-scores matrix !
+  TSF <- factor.na(TSF,factorNA)
+  
+  TSF <- renameCol(TSF,"factorscore",factorName)
+  if(i==1L){
+    re <- TSF
+  } else {
+    re <- merge(re,TSF[,c("date","stockID",factorName)],by=c("date","stockID"))
+  }
+}
+
 
 data <- calcfres(TSF,alphafactorLists,riskfactorLists,regresstype = 'glm')
 TSFR <- data[[1]]
@@ -63,7 +93,6 @@ tsConnect()
 lcdb.update()
 add.index.lcdb(indexID="EI801003")
 add.index.lcdb(indexID="EI000985")
-lcdb.update.QT_FactorScore_amtao()
 fix.lcdb.swindustry()
 
-system.time(lcfs.add(factorFun="gf.F_rank_chg",factorPar="lag=60,con_type=\"1,2\"", factorDir=1, factorID="F000009"))
+
