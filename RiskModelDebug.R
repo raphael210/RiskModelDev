@@ -2,6 +2,7 @@ source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
 RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-06-30'),rebFreq = 'week')
 TS <- getTS(RebDates,'EI000985')
 
+# added by qianmazi---test
 #alpha factor setting 
 alphafactorLists <- buildFactorLists(
   buildFactorList("gf.NP_YOY",factorStd="norm")
