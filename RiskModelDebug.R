@@ -1,24 +1,37 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
+<<<<<<< HEAD
 RebDates <- getRebDates(as.Date('2011-12-31'),as.Date('2016-07-31'),rebFreq = 'week')
 TS <- getTS(RebDates,'EI000985')
+=======
+
+library(RFactorModel)
+RebDates <- getRebDates(as.Date('2015-12-31'),as.Date('2016-06-30'),rebFreq = 'month')
+TS <- getTS(RebDates,'EI000300')
+>>>>>>> 11121ced2cdf34ceb2bdf389e67280a80c2e2f19
 
 #alpha factor setting 
 alphafactorLists <- buildFactorLists(
   buildFactorList("gf.NP_YOY",factorStd="norm")
 )
-factorIDs <- c("F000003","F000008","F000009","F000012","F000013","F000014","F000017")
+factorIDs <- c("F000003","F000008")
 tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm")
 alphafactorLists <- c(alphafactorLists,tmp)
 
 #risk factor setting 
 riskfactorLists <- buildFactorLists(
-  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm")
+  buildFactorList(factorFun = "gf.mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm")
 )
-factorIDs <- c("F000006","F000015","F000016")
+factorIDs <- c("F000006")
 tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
 riskfactorLists <- c(riskfactorLists,tmp)
 
+data <- calcfresbyTS(TS,alphafactorLists,riskfactorLists,"glm",sectorAttr = list(33,1),dure = months(1))
 
+
+
+
+
+<<<<<<< HEAD
 factorLists <- c(alphafactorLists,riskfactorLists)
 for(i in 1:length(factorLists)){
   factorFun <- factorLists[[i]]$factorFun
@@ -54,6 +67,8 @@ for(i in 1:length(factorLists)){
 
 
 data <- calcfres(TSF,alphafactorLists,riskfactorLists,regresstype = 'glm')
+=======
+>>>>>>> 11121ced2cdf34ceb2bdf389e67280a80c2e2f19
 TSFR <- data[[1]]
 alphaf <- data[[2]]
 riskf <- data[[3]]
