@@ -38,7 +38,7 @@ fix.lcdb.indexcomperr <- function(){
 #' @param riskfactorLists is a set of risk factors for regressing.
 #' @return a list,contains TSFR,alphaf,riskf,residual
 #' @examples
-#' RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-06-30'),rebFreq = 'week')
+#' RebDates <- getRebDates(as.Date('2012-12-31'),as.Date('2016-06-30'),rebFreq = 'week')
 #' TS <- getTS(RebDates,'EI000985')
 #' riskfactorLists <- buildFactorLists(
 #' buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm")
@@ -56,15 +56,32 @@ risk.factor.test <- function(TS,alphafactorLists,riskfactorLists){
   for (i in 1:length(dates)) {
     setTxtProgressBar(pb, i/length(dates))
     tmp.TS <- TS[TS$date==dates[i],]
-    TSF <- getMultiFactor(tmp.TS,c(alphafactorLists,riskfactorLists))
+    
+    TSR <- getTSR(tmp.TS,months(1))
+    TSR <- na.omit(TSR)
+    if(nrow(TSR)==0) next
+    TSR <- TSR[TSR$periodrtn>=(mean(TSR$periodrtn)-3*sd(TSR$periodrtn)),]
+    TSR <- TSR[TSR$periodrtn<=(mean(TSR$periodrtn)+3*sd(TSR$periodrtn)),]
+    tmp <- c(rdate2int(TSR$date[1]),rdate2int(TSR$date_end[1]))
+    qr <- paste("select * from QT_UnTradingDay where TradingDay in",
+                paste("(",paste(tmp,collapse = ','),")",sep=''))
+    con <- db.local()
+    re <- dbGetQuery(con,qr)
+    dbDisconnect(con)
+    re$TradingDay <- intdate2r(re$TradingDay)
+    TSR <- TSR[!(TSR$stockID %in% re[re$TradingDay==TSR$date[1],'ID']),]
+    TSR <- TSR[!(TSR$stockID %in% re[re$TradingDay==TSR$date_end[1],'ID']),]
+    
+    TSF <- getMultiFactor(TSR[,c('date','stockID')],c(alphafactorLists,riskfactorLists))
     TSF <- TSF[,c('date','stockID',alphaname,riskname)]
     
-    TSS <- getSectorID(tmp.TS,sectorAttr = list(33,1))
-    TSS[is.na(TSS$sector),'sector'] <- 'ES33510000'
+    TSS <- getSectorID(TSR[,c('date','stockID')],sectorAttr = list(33,1))
+    #TSS[is.na(TSS$sector),'sector'] <- 'ES33510000'
+    TSS <- TSS[!is.na(TSS$sector),]
     TSS <- dcast(TSS,date+stockID~sector,length,fill=0,value.var = 'sector')
     indname <- colnames(TSS)[-1:-2]
     
-    TSR <- getTSR(tmp.TS,months(3))
+
     
     #merge data
     TSF <- merge(TSF,TSS,by=c('date','stockID'),all.x=T)
@@ -114,6 +131,7 @@ risk.factor.test <- function(TS,alphafactorLists,riskfactorLists){
 
 
 rs <- xts(rsquare[,-1],order.by = rsquare[,1])
+ggplot.ts.line(rs)
 rs <- rollmean(rs,12)
 ggplot.ts.line(rs)
 

@@ -31,13 +31,14 @@ $$IVR=1-R^{2}$$
 因子IC序列如下图所示：
     
 ```{r factorIC,warning=FALSE}
-begT <- as.Date('2006-01-31')
+begT <- as.Date('2005-12-31')
 endT <- as.Date('2016-06-30')
 RebDates <- getRebDates(begT,endT)
 #TS <- getTS(RebDates,'EI000985')
 #TSF <- getTSF(TS,factorFun = 'gf_lcfs',factorPar = list(factorID='F000017'),factorDir = -1,
 #              factorStd = 'norm')
-load("~/R/FactorModelDev/TSFR.RData")
+load("~/R/RiskModelDev/TSFR.RData")
+TSFR <- na.omit(TSFR)
 chart.IC(TSFR)
 ```
     
