@@ -1,10 +1,14 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
+<<<<<<< HEAD
+RebDates <- getRebDates(as.Date('2011-12-31'),as.Date('2016-07-31'),rebFreq = 'week')
+TS <- getTS(RebDates,'EI000985')
+=======
 
 library(RFactorModel)
 RebDates <- getRebDates(as.Date('2015-12-31'),as.Date('2016-06-30'),rebFreq = 'month')
 TS <- getTS(RebDates,'EI000300')
+>>>>>>> 11121ced2cdf34ceb2bdf389e67280a80c2e2f19
 
-# added by qianmazi---test
 #alpha factor setting 
 alphafactorLists <- buildFactorLists(
   buildFactorList("gf.NP_YOY",factorStd="norm")
@@ -27,6 +31,44 @@ data <- calcfresbyTS(TS,alphafactorLists,riskfactorLists,"glm",sectorAttr = list
 
 
 
+<<<<<<< HEAD
+factorLists <- c(alphafactorLists,riskfactorLists)
+for(i in 1:length(factorLists)){
+  factorFun <- factorLists[[i]]$factorFun
+  factorPar <- factorLists[[i]]$factorPar
+  factorName <- factorLists[[i]]$factorName
+  factorDir <- factorLists[[i]]$factorDir
+  factorOutlier <- factorLists[[i]]$factorOutlier
+  factorNA <- factorLists[[i]]$factorNA    
+  factorStd <- factorLists[[i]]$factorStd 
+  sectorAttr  <- factorLists[[i]]$sectorAttr
+  cat(paste("Function getMultiFactor: getting the score of factor",factorName,"....\n"))
+  # ---- get the raw factorscore
+  TSF <- getRawFactor(TS,factorFun,factorPar) 
+  # ---- adjust the direction (of the "single-factor-score")
+  TSF$factorscore <- TSF$factorscore*factorDir
+  # ---- deal with the outliers (of the "single-factor-score")
+  TSF <- RFactorModel:::factor.outlier(TSF,factorOutlier)
+  # ---- standardize the factorscore (of the "single-factor-score")
+  if(factorStd =="none"){
+    warning(paste("'factorStd' of factor",factorName, "is 'none'. It might make mistake when compute the multi-factorscore!"))
+  }
+  TSF <- RFactorModel:::factor.std(TSF,factorStd,sectorAttr)  
+  # ---- deal with the missing values (of the "single-factor-score")
+  TSF <- RFactorModel:::factor.na(TSF,factorNA)
+  
+  TSF <- renameCol(TSF,"factorscore",factorName)
+  if(i==1L){
+    re <- TSF
+  } else {
+    re <- merge(re,TSF[,c("date","stockID",factorName)],by=c("date","stockID"))
+  }
+}
+
+
+data <- calcfres(TSF,alphafactorLists,riskfactorLists,regresstype = 'glm')
+=======
+>>>>>>> 11121ced2cdf34ceb2bdf389e67280a80c2e2f19
 TSFR <- data[[1]]
 alphaf <- data[[2]]
 riskf <- data[[3]]
@@ -60,11 +102,12 @@ rtn.summary(re)
 
 
 # update local data base
+library(quantbox)
+library(lubridate)
 tsInclude()
 tsConnect()
-lcdb.update()
-add.index.lcdb(indexID="EI801003")
-add.index.lcdb(indexID="EI000985")
+system.time(lcdb.update())
+lcfs.update()
 fix.lcdb.swindustry()
 
 
