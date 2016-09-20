@@ -1,13 +1,12 @@
 source('~/R/FactorModelDev/RiskModelDev.R', encoding = 'UTF-8', echo=TRUE)
-<<<<<<< HEAD
 RebDates <- getRebDates(as.Date('2011-12-31'),as.Date('2016-07-31'),rebFreq = 'week')
 TS <- getTS(RebDates,'EI000985')
-=======
+
 
 library(RFactorModel)
-RebDates <- getRebDates(as.Date('2015-12-31'),as.Date('2016-06-30'),rebFreq = 'month')
-TS <- getTS(RebDates,'EI000300')
->>>>>>> 11121ced2cdf34ceb2bdf389e67280a80c2e2f19
+RebDates <- getRebDates(as.Date('2009-12-31'),as.Date('2016-08-31'),rebFreq = 'month')
+TS <- getTS(RebDates,'EI000985')
+
 
 #alpha factor setting 
 alphafactorLists <- buildFactorLists(
@@ -18,20 +17,26 @@ tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm")
 alphafactorLists <- c(alphafactorLists,tmp)
 
 #risk factor setting 
-riskfactorLists <- buildFactorLists(
-  buildFactorList(factorFun = "gf.mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm")
+existfLists <- buildFactorLists(
+  buildFactorList(factorFun = "gf.ln_mkt_cap",factorDir = -1,factorNA = "median",factorStd = "norm"),
+  buildFactorList("gf.NP_YOY",factorStd="norm",factorNA = "median"),
 )
-factorIDs <- c("F000006")
+factorIDs <- c("F000003","F000008","F000007")
 tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
+existfLists <- c(existfLists,)
+
+factorIDs <- c("F000006")
+factorIDs <- c("F000006","F000015","F000016")
+newfList <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
 riskfactorLists <- c(riskfactorLists,tmp)
+
+
 
 data <- calcfresbyTS(TS,alphafactorLists,riskfactorLists,"glm",sectorAttr = list(33,1),dure = months(1))
 
 
 
 
-
-<<<<<<< HEAD
 factorLists <- c(alphafactorLists,riskfactorLists)
 for(i in 1:length(factorLists)){
   factorFun <- factorLists[[i]]$factorFun
@@ -67,8 +72,7 @@ for(i in 1:length(factorLists)){
 
 
 data <- calcfres(TSF,alphafactorLists,riskfactorLists,regresstype = 'glm')
-=======
->>>>>>> 11121ced2cdf34ceb2bdf389e67280a80c2e2f19
+
 TSFR <- data[[1]]
 alphaf <- data[[2]]
 riskf <- data[[3]]
@@ -107,7 +111,5 @@ library(lubridate)
 tsInclude()
 tsConnect()
 system.time(lcdb.update())
-lcfs.update()
-fix.lcdb.swindustry()
 
 
