@@ -1,0 +1,438 @@
+---
+title: "波动率因子研究"
+author: "陶阿明"
+date: "`r format(Sys.time(), '%Y/%m/%d')`"
+output: 
+  html_document:
+    toc: true # table of content true
+    depth: 3  # upto three depths of headings (specified by #, ## and ###)
+---
+
+```{r setup, include=FALSE}
+library(quantbox)
+library(xts)
+library(knitr)
+tsInclude()
+tsConnect()
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+
+## 一、因子综述
+   
+### (一)指数概览
+   
+**股票波动率即股票区间收益率的标准差**。在研究波动率因子之前，先介绍几个波动率相关的指数。   
+    
+中证指数公司于2012年1月9日，发布了沪深300波动率加权指数(000803.CSI，以下简称300波动)、中证500波动率加权指数(000804.CSI，以下简称500波动)，指数成分股均为100只。波动率加权指数是以标的指数为样本空间，选取历史波动率最小的100只股票作为样本股，且以历史波动率的倒数为权重，波动率越小权重越大，波动率越大权重越小。具体的指数编制方案可以参见中证指数公司官网。
+    
+300波动和500波动及标的指数的历史走势如下图。
+   
+```{r volindexplot,warning=FALSE}
+load("volData.RData")
+volIndex <- volData[volData$stockID %in% c("EI000300","EI000803","EI000905","EI000804"),]
+volIndexClose <- reshape2::dcast(volIndex,DATETIME~stockID,value.var = 'CLOSE')
+volIndexClose <- volIndexClose[,c("DATETIME","EI000300","EI000803","EI000905","EI000804")]
+volIndexClose <- xts(volIndexClose[,-1],order.by = volIndexClose[,1])
+names(volIndexClose) <- c('沪深300','沪深300波动','中证500','中证500波动')
+ggplot.ts.line(volIndexClose)
+```
+    
+    
+300波动和500波动及标的指数的历史收益统计如下表。      
+    
+500波动是一个10年10倍的指数。300波动和500波动的累积收益均为标的指数的两倍左右，年化收益率平均超过标的指数5-6个百分点，夏普值和最大回撤均优于标的指数，且在过去12年间大部分年份跑赢标的指数。   
+    
+波动率指数近似一个等权指数，成分股的权重差别很小。
+    
+    
+```{r volindextable,results='asis'}
+volIndexRtn <- reshape2::dcast(volIndex,DATETIME~stockID,value.var = 'PCT_CHG')
+volIndexRtn <- volIndexRtn[,c("DATETIME","EI000300","EI000803","EI000905","EI000804")]
+volIndexRtn <- xts(volIndexRtn[,-1],order.by = volIndexRtn[,1])
+volIndexRtn <- rtn.persum(volIndexRtn)
+colnames(volIndexRtn) <- c('沪深300','沪深300波动','中证500','中证500波动')
+kable(volIndexRtn)
+```
+    
+   
+以上波动率指数的构建方法都是传统的打分排序，此外中证指数公司跟风险模型提供商Axioma合作发布了两个波动率优化指数，优化高波(H30129.CSI)，优化低波(H30130.CSI)，均是在沪深300成分股内进行选股。
+    
+优化指数是基于Axioma的风险模型和优化算法，选取不定数量的样本，实现特定因子的最大暴露，其他因子接近中性暴露。目前优化指数已停止更新，这里仅作展示，不深入研究。
+    
+优化指数走势如下图。
+
+
+```{r volOptindexplot,warning=FALSE}
+volIndex <- volData[volData$stockID %in% c("EI000300","EI000803","EIH30129","EIH30130"),]
+volIndexClose <- reshape2::dcast(volIndex,DATETIME~stockID,value.var = 'CLOSE')
+volIndexClose <- na.omit(volIndexClose)
+volIndexClose <- xts(volIndexClose[,-1],order.by = volIndexClose[,1])
+names(volIndexClose) <- c('沪深300','沪深300波动','优化高波','优化低波')
+ggplot.ts.line(volIndexClose)
+```
+    
+    
+300波动和优化指数的历史收益统计如下表。从业绩表现来看，传统的打分排序构建的组合不输于优化的组合。
+     
+     
+```{r volOptindextable,results='asis'}
+volIndexRtn <- reshape2::dcast(volIndex,DATETIME~stockID,value.var = 'PCT_CHG')
+volIndexRtn <- na.omit(volIndexRtn)
+volIndexRtn <- xts(volIndexRtn[,-1],order.by = volIndexRtn[,1])
+volIndexRtn <- rtn.persum(volIndexRtn)
+colnames(volIndexRtn) <- c('沪深300','沪深300波动','优化高波','优化低波')
+kable(volIndexRtn)
+```
+
+
+
+
+### (二)因子效果展示
+    
+从上面的研究可以看出，波动率是一个负向因子。**波动率因子暂定为过去250个交易日日收益率的标准差**。
+    
+中证全指样本空间波动率因子IC序列如下图所示。因子的IC均值0.011，IC标准差0.16，IC胜率56.7%，就IC来看，波动率因子表现一般。
+      
+```{r factorIC,warning=FALSE,message=FALSE}
+begT <- as.Date('2005-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT)
+TS <- getTS(RebDates,'EI000985')
+TSF <- merge.x(TS,TSF250)
+suppressMessages(TSFR <- getTSR(TSF))
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```
+    
+    
+全市场因子分组的年化收益率如下图所示。波动率因子并没有明显的单调性。
+    
+```{r factorgroup,warning=FALSE}
+chart.Ngroup.overall(TSFR,N = 10)
+```
+   
+    
+因子多空收益如下图所示。波动率因子多空收益表现不稳定。
+     
+```{r factorls,warning=FALSE}
+chart.Ngroup.spread(TSFR,N = 10)
+```
+
+
+### (三)因子参数调整
+      
+截至目前，波动率因子并不是一个很好的因子。不过不同因子适用的调仓频率可能不太一样。上面都是假设每个月调仓一次。下图展示的是季度调仓的因子IC序列。
+      
+季度调仓的因子IC表现明显提升。IC均值0.037，IC标准差0.13，IC胜率60%，各项指标大幅优于月度调仓。  
+
+```{r factorquarterIC,warning=FALSE}
+begT <- as.Date('2005-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT,rebFreq = 'quarter')
+TS <- getTS(RebDates,'EI000985')
+TSF <- merge.x(TS,TSF250)
+TSFR <- getTSR(TSF)
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```
+      
+     
+下图展示的是半年度调仓的因子IC序列。
+    
+半年度调仓的因子IC表现再度提升。因子的IC均值0.054，IC标准差0.14，IC胜率71%。不过半年度调仓IC样本数量较少，可能导致结论偏差较大。  
+    
+```{r factorhalfIC,warning=FALSE}
+begT <- as.Date('2005-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT,rebFreq = '6 months')
+TS <- getTS(RebDates,'EI000985')
+TSF <- merge.x(TS,TSF250)
+TSFR <- getTSR(TSF)
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```
+     
+除了调整调仓频率，收益区间也可以调整。目前默认是250个交易日。下图展示的是20个交易日的波动率因子IC序列。
+      
+IC均值0.015，IC标准差0.14，IC胜率58.2%，就IC来看，较250日有一定的改善。
+    
+```{r factor20IC,warning=FALSE}
+begT <- as.Date('2005-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT)
+TS <- getTS(RebDates,'EI000985')
+TSF <- merge.x(TS,TSF20)
+TSFR <- getTSR(TSF)
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```
+   
+      
+下图展示的是60个交易日的波动率因子IC序列。IC均值0.015，IC标准差0.16，IC胜率54.6%，整体差于20个交易日的波动率因子。
+    
+```{r factor60IC,warning=FALSE}
+begT <- as.Date('2005-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT)
+TS <- getTS(RebDates,'EI000985')
+TSF <- merge.x(TS,TSF60)
+TSFR <- getTSR(TSF)
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```    
+
+
+我们无意去遍历所有可能参数组合，这样有过度挖掘的嫌疑。结合前面的参数分析，我们不妨认为季度调仓20个交易日波动率组合是一个比较不错的参数组合。
+        
+该参数组合下因子IC如下图所示。因子的IC均值0.043，IC标准差0.11，IC胜率65%。接下去的研究都是基于该参数组合。
+    
+```{r factorquar60IC,warning=FALSE}
+begT <- as.Date('2005-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT,rebFreq = 'quarter')
+TS <- getTS(RebDates,'EI000985')
+TSF <- merge.x(TS,TSF20)
+TSFR <- getTSR(TSF)
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```    
+
+
+新参数组合下全市场波动率因子分组的年化收益率如下图所示。波动率因子分组收益率的单调性有所增强。
+    
+```{r factornewgroup,warning=FALSE}
+chart.Ngroup.overall(TSFR,N = 10)
+```
+
+
+新参数组合下因子多空收益如下图所示。因子多空收益依然不稳定。
+     
+```{r factornewls,warning=FALSE}
+chart.Ngroup.spread(TSFR,N = 10)
+```
+
+
+### (四)纯因子组合
+    
+纯因子组合是剔除了市值、行业、反转、净利润增速等风险特征的纯因子组合，更能有效的反映因子的alpha性。   
+     
+
+```{r purefactordata,include=FALSE}
+factorIDs <- c("F000002","F000006","F000008")
+tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
+factorLists <- buildFactorLists(
+  buildFactorList(factorFun="gf.NP_YOY",
+                  factorPar=list(),
+                  factorDir=1),
+    buildFactorList(factorFun="gf.volatility",
+                  factorPar=list(nwin=20),
+                  factorDir=-1),
+  factorStd="norm",factorNA = "median")
+factorLists <- c(tmp,factorLists)
+re <- reg.TS(TS,factorLists,dure = NULL)
+factorRtn <- re$reg$fRtn
+factorRtn <- reshape2::dcast(factorRtn,date~fname,value.var = 'frtn')
+factorRtn <- arrange(factorRtn,date)
+factorRtn <- xts(factorRtn[,-1],factorRtn[,'date'])
+```
+    
+纯因子组合收益率如下图所示。波动率因子在剥离了行业、市值、反转、PB、净利润增速之后的任然能够贡献alpha，虽然表现不及其他几个传统的因子。
+   
+   
+```{r purefactorPlot,warning=FALSE}
+ggplot.WealthIndex(factorRtn,main = '纯因子组合收益率')
+```  
+    
+    
+纯因子组合收益率统计如下表：
+    
+```{r purefactortable,results='asis'}
+rtnsum <- rtn.persum(factorRtn)
+kable(rtnsum)
+```
+
+       
+       
+**************************************************************************
+    
+    
+**************************************************************************
+
+## 二、核心指数回测
+   
+上面的测试都是全市场测试，下面将在沪深300和中证500里面分别测试因子的效果。
+    
+### (一)沪深300
+    
+沪深300指数成分股内多空组合表现如下图所示：
+   
+```{r factor300,warning=FALSE}
+begT <- as.Date('2006-01-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT,rebFreq = 'quarter')
+TS <- getTS(RebDates,'EI000300')
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indexStat <- table.factor.summary(TSFRtmp)
+colnames(indexStat) <- 'EI000300'
+```
+  
+### (二)中证500
+        
+中证500指数成分股内多空组合表现如下图所示：
+    
+```{r factor500,warning=FALSE}
+if(begT<as.Date('2007-01-31')){
+  tmp.RebDates <- getRebDates(as.Date('2007-01-31'),endT,rebFreq = 'quarter')
+  TS <- getTS(tmp.RebDates,'EI000905')
+}else{
+  TS <- getTS(RebDates,'EI000905')
+}
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indexStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indexStat.tmp) <- 'EI000905'
+indexStat <- cbind(indexStat,indexStat.tmp)
+```
+
+    
+### (三)指数统计
+      
+两个指数中因子的IC统计和因子的多空组合收益率如下表所示。波动率因子在中证500成分股里表现要优于沪深300。     
+     
+```{r indexst,results='asis'}
+indexStat <- as.data.frame(indexStat)
+indexStat <- indexStat[c("IC.mean","IC.std","IC.IR","IC.hitRatio","Annualized Return","Annualized StdDev","Annualized Sharpe(Rf=0%)","Worst Drawdown"),]
+rownames(indexStat) <- c('IC均值','IC标准差','ICIR','IC胜率','多空组合年化收益','多空组合年化波动率','多空组合年化夏普','多空组合最大回撤')
+kable(indexStat)
+```
+
+
+     
+**************************************************************************
+    
+    
+**************************************************************************
+   
+## 三、大类行业回测
+      
+申万一级行业共28个，下面将这28个行业分成了7个大类行业，研究因子在各个大类行业中的表现，仅展示因子的多空收益。
+    
+### (一)大周期
+    
+大周期覆盖农林牧渔、采掘、化工、钢铁、有色金属。
+     
+```{r indNLMY,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(union(ES33110000,ES33210000),ES33220000),ES33230000),ES33240000)")
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat <- table.factor.summary(TSFRtmp)
+colnames(indStat) <- '周期'
+```
+
+    
+### (二)金融地产
+     
+金融地产组覆盖银行、非银、房地产。
+      
+```{r indYH,warning=FALSE}
+TS <- getTS(RebDates,"union(union(ES33480000,ES33490000),ES33430000)")
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '金融地产'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+
+### (三)TMT
+     
+TMT覆盖电子、计算机、传媒、通信。
+    
+```{r indJSJ,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(ES33710000,ES33720000),ES33730000),ES33270000)")
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'TMT'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (四)大消费
+
+大消费覆盖汽车、家用电器、食品饮料、纺织服装、休闲服务、医药生物、商业贸易。
+    
+```{r indQC,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(union(union(union(ES33280000,ES33330000),ES33340000),ES33350000),ES33460000),ES33370000),ES33450000)")
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '消费'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (五)制造组
+
+制造组覆盖轻工制造、建筑材料、建筑建材、电气设备、机械设备、国防军工。
+      
+     
+```{r indZZ,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(union(union(ES33360000,ES33630000),ES33640000),ES33610000),ES33620000),ES33650000)")
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '制造'
+indStat <- cbind(indStat,indStat.tmp)
+```
+
+    
+
+### (六)其他
+    
+其他覆盖公共事业、交通运输、综合。   
+    
+```{r indQGZZ,warning=FALSE}
+TS <- getTS(RebDates,"union(union(ES33420000,ES33410000),ES33510000)")
+TSF <- merge.x(TS,TSF20)
+TSFRtmp <- getTSR(TSF)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '其他'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+
+
+    
+### (七)行业统计
+    
+大类行业中因子的IC统计和因子的多空组合收益率如下表所示。波动率因子在金融地产中表现最好，制造业中表现也不错。   
+     
+```{r indst,results='asis'}
+indStat <- as.data.frame(indStat)
+indStat <- indStat[c("IC.mean","IC.std","IC.IR","IC.hitRatio","Annualized Return","Annualized StdDev","Annualized Sharpe(Rf=0%)","Worst Drawdown"),]
+rownames(indStat) <- c('IC均值','IC标准差','ICIR','IC胜率','多空组合年化收益','多空组合年化波动率','多空组合年化夏普','多空组合最大回撤')
+kable(indStat)
+```
+
+     
+**************************************************************************
+    
+    
+**************************************************************************
+
+
+
+
+
+

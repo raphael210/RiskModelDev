@@ -1,0 +1,260 @@
+---
+title: "非流动性因子测试"
+author: "陶阿明"
+date: "`r format(Sys.time(), '%Y/%m/%d')`"
+output: 
+  html_document:
+    toc: true # table of content true
+    depth: 3  # upto three depths of headings (specified by #, ## and ###)
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(quantbox)
+knitr::opts_chunk$set(echo=FALSE)
+```
+
+
+## 一、因子综述
+   
+### (一)因子简介 
+   
+非流动性因子比较简单，但效果非常好，即每天个股涨跌幅的绝对值除以当日成交额，再取过去一个月的平均值。
+
+
+### (二)因子效果展示
+    
+因子IC序列如下图所示：
+    
+```{r factorIC,warning=FALSE}
+begT <- as.Date('2005-12-31')
+endT <- as.Date('2016-10-31')
+RebDates <- getRebDates(begT,endT)
+TS <- getTS(RebDates,'EI000985')
+
+# TSF <- getTSF(TS,factorFun = 'gf.ILLIQ',factorPar = list(loadData=TRUE),factorNA = 'na',
+#                factorStd = 'norm')
+#  TSFR <- getTSR(TSF)
+load("TSFR.RData")
+TSFR <- na.omit(TSFR)
+chart.IC(TSFR)
+```
+    
+    
+因子分组的年化收益率如下图所示：
+    
+```{r factorgroup,warning=FALSE}
+chart.Ngroup.overall(TSFR,N = 10)
+```
+   
+    
+因子多空收益如下图所示：
+     
+```{r factorls,warning=FALSE}
+chart.Ngroup.spread(TSFR,N = 10)
+```
+
+
+
+### (三)纯因子组合
+    
+上述因子IC、因子分组、因子多空组合不能剥离行业、市值等风格特征。下面构建的纯因子组合是剔除了市值、行业、估值等风险特征的纯因子组合，更能有效的反映因子的alpha性。   
+     
+
+```{r purefactordata,include=FALSE}
+factorIDs <- c("F000002","F000006","F000008")
+tmp <- buildFactorLists_lcfs(factorIDs,factorStd="norm",factorNA = "median")
+factorLists <- buildFactorLists(
+  buildFactorList(factorFun="gf.NP_YOY",
+                  factorPar=list(),
+                  factorDir=1),
+  factorStd="norm",factorNA = "median")
+factorLists <- c(tmp,factorLists)
+TSMFR <- getMultiFactor(TSFR[,c('date','stockID')],factorLists)
+TSMFR <- dplyr::left_join(TSMFR,TSFR,by=c('date','stockID'))
+TSMFR <- dplyr::rename(TSMFR,ILLIQ=factorscore)
+
+re <- reg.TSFR(TSMFR)
+factorRtn <- re$fRtn
+factorRtn <- reshape2::dcast(factorRtn,date~fname,value.var = 'frtn')
+factorRtn <- arrange(factorRtn,date)
+factorRtn <- xts::xts(factorRtn[,-1],factorRtn[,'date'])
+```
+
+     
+     
+    
+纯因子组合收益率如下图所示：
+   
+   
+```{r purefactorPlot,warning=FALSE}
+ggplots.PerformanceSummary(factorRtn,main= '纯因子组合收益')
+```  
+    
+    
+纯因子组合收益率统计如下表：
+    
+```{r purefactortable,results='asis'}
+rtnsum <- rtn.persum(factorRtn)
+kable(rtnsum)
+```
+
+       
+       
+**************************************************************************
+    
+    
+**************************************************************************
+
+## 二、核心指数回测
+   
+上面的测试都是全市场测试，下面将在沪深300和中证500里面分别测试因子的效果。
+    
+### (一)沪深300
+   
+```{r factor300,warning=FALSE}
+TS <- getTS(RebDates,'EI000300')
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indexStat <- table.factor.summary(TSFRtmp)
+colnames(indexStat) <- 'EI000300'
+```
+  
+### (二)中证500
+    
+```{r factor500,warning=FALSE}
+if(begT<as.Date('2007-01-31')){
+  tmp.RebDates <- getRebDates(as.Date('2007-01-31'),endT)
+  TS <- getTS(tmp.RebDates,'EI000905')
+}else{
+  TS <- getTS(RebDates,'EI000905')
+}
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indexStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indexStat.tmp) <- 'EI000905'
+indexStat <- cbind(indexStat,indexStat.tmp)
+```
+
+    
+### (三)指数统计
+两个指数中因子的IC统计和因子的多空组合收益率如下表所示     
+     
+```{r indexst,results='asis'}
+indexStat <- as.data.frame(indexStat)
+indexStat <- indexStat[c("IC.mean","IC.std","IC.IR","IC.hitRatio","Annualized Return","Annualized StdDev","Annualized Sharpe(Rf=0%)","Worst Drawdown"),]
+rownames(indexStat) <- c('IC均值','IC标准差','ICIR','IC胜率','多空组合年化收益','多空组合年化波动率','多空组合年化夏普','多空组合最大回撤')
+kable(indexStat)
+```
+
+
+     
+**************************************************************************
+    
+    
+**************************************************************************
+   
+## 三、大类行业回测
+    
+### (一)大周期
+大周期覆盖农林牧渔、采掘、化工、钢铁、有色金属。
+     
+```{r indNLMY,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(union(ES33110000,ES33210000),ES33220000),ES33230000),ES33240000)")
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat <- table.factor.summary(TSFRtmp)
+colnames(indStat) <- '周期'
+```
+
+    
+### (二)金融地产
+金融地产组覆盖银行、非银、房地产。
+      
+```{r indYH,warning=FALSE}
+TS <- getTS(RebDates,"union(union(ES33480000,ES33490000),ES33430000)")
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '金融地产'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+
+### (三)TMT
+TMT覆盖电子、计算机、传媒、通信。
+    
+```{r indJSJ,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(ES33710000,ES33720000),ES33730000),ES33270000)")
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- 'TMT'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+     
+### (四)大消费
+大消费覆盖汽车、家用电器、食品饮料、纺织服装、休闲服务、医药生物、商业贸易。
+    
+```{r indQC,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(union(union(union(ES33280000,ES33330000),ES33340000),ES33350000),ES33460000),ES33370000),ES33450000)")
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '消费'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+    
+### (五)制造组
+制造组覆盖轻工制造、建筑材料、建筑建材、电气设备、机械设备、国防军工。
+      
+     
+```{r indZZ,warning=FALSE}
+TS <- getTS(RebDates,"union(union(union(union(union(ES33360000,ES33630000),ES33640000),ES33610000),ES33620000),ES33650000)")
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '制造'
+indStat <- cbind(indStat,indStat.tmp)
+```
+
+    
+
+### (六)其他
+其他覆盖公共事业、交通运输、综合。   
+    
+```{r indQGZZ,warning=FALSE}
+TS <- getTS(RebDates,"union(union(ES33420000,ES33410000),ES33510000)")
+TSFRtmp <- merge.x(TS,TSFR)
+chart.Ngroup.spread(TSFRtmp,N=10)
+indStat.tmp <- table.factor.summary(TSFRtmp)
+colnames(indStat.tmp) <- '其他'
+indStat <- cbind(indStat,indStat.tmp)
+```
+    
+
+
+    
+### (七)行业统计
+大类行业中因子的IC统计和因子的多空组合收益率如下表所示     
+     
+```{r indst,results='asis'}
+indStat <- as.data.frame(indStat)
+indStat <- indStat[c("IC.mean","IC.std","IC.IR","IC.hitRatio","Annualized Return","Annualized StdDev","Annualized Sharpe(Rf=0%)","Worst Drawdown"),]
+rownames(indStat) <- c('IC均值','IC标准差','ICIR','IC胜率','多空组合年化收益','多空组合年化波动率','多空组合年化夏普','多空组合最大回撤')
+kable(indStat)
+```
+
+     
+**************************************************************************
+    
+    
+**************************************************************************
+
+
+
+
+
+
